@@ -1,4 +1,4 @@
-/** v2: setup → editable groups → resumable in-memory batches. No apply yet. */
+/** v2: setup → editable groups → resumable batches → Condense review. */
 import { escapeHtml, downloadJson, isCancellation } from '../core/index.js';
 import { createModal, showModal, setModalOpener, setStatus } from '../core/modal.js';
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
@@ -9,6 +9,8 @@ import { estimateDeepGroupingRequest, requestDeepConsolidationGroups } from './d
 import { deepGroupingSources, groupDeepSourcesByPosition, measureDeepGroup, moveDeepGroupingSource, normalizeDeepGroupLabel } from './deep_consolidation_groups.js';
 import { createDeepConsolidationDraft, getDeepConsolidationDraft, clearDeepConsolidationDraft, deepDraftMatches } from './deep_consolidation_batches.js';
 import { runDeepConsolidationBatches, estimateDeepBatchRequest } from './deep_consolidation_batch_request.js';
+import { handoffDeepConsolidationDraft } from './deep_consolidation_handoff.js';
+import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
 
 const ID = 'kt-deep-consolidation-modal';
 const esc = value => escapeHtml(String(value ?? ''));
@@ -39,7 +41,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     });
     const body = modal.querySelector('.kt-deep-content');
     const current = () => !closed && modal.isConnected && scopeStillCurrent(scope).ok;
-    const intro = '<p><strong>Experimental batches (v2 Phase 2).</strong> Batch results stay in memory when this modal closes, but are lost on page reload. Nothing is applied or written to the Knowledge entry. Condense hand-off is not implemented yet.</p>';
+    const intro = '<p><strong>Experimental batches (v2 Phase 3).</strong> Batch results stay in memory when this modal closes, but are lost on page reload. Hand off any completed work to the Condense review to edit, keep originals, or explicitly apply with recovery. Nothing is written to the Knowledge entry before Apply.</p>';
     if (!prepared.selection) {
         body.innerHTML = `${intro}<p>${esc(prepared.eligibility.reason || 'No ledger lines to group.')}</p>`;
         setModalOpener(modal, opener);
@@ -109,6 +111,8 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
             ${button('run-batches', 'Run / resume pending batches', disabled || !draft.batches.some(b => b.status === 'pending') ? 'disabled' : '')}
             ${button('retry-failed', 'Retry all failed batches', disabled || !draft.batches.some(b => b.status === 'failed') ? 'disabled' : '')}
             ${button('discard-draft', 'Discard in-memory batch draft', busy || draft.running ? 'disabled' : '')}
+            <h4>4. Hand off to Condense</h4><p>Accepted batches become review records. Every other source stays exact, including pending and failed batches. No additional model call is made; any previous Condense draft stays exportable.</p>
+            ${button('handoff', 'Review in Condense', busy || draft.running || !matches ? 'disabled' : '')}
             ${draft.batches.map(batch => {
         const request = estimateDeepBatchRequest(name, batch);
         return `<section><h5>${esc(batch.id)} · ${esc(batch.label)} · ${esc(batch.status)}</h5>
@@ -168,7 +172,21 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         if (action === 'cancel') { controller?.abort(); return; }
         if (busy) return;
         try {
-            if (action === 'plan-batches' && session && !draft) {
+            if (action === 'handoff' && draft) {
+                if (document.getElementById('kt-ledger-review-modal')) throw new Error('Close the existing Condense review before handing off.');
+                controller = new AbortController();
+                busy = true;
+                updateDisclosure();
+                try {
+                    const result = await handoffDeepConsolidationDraft(draft, { signal: controller.signal });
+                    if (!current()) return;
+                    modal._closeModal?.();
+                    await openLedgerCleanupReviewModal(result.capture.name, result.capture.uid, { resumeDraft: true });
+                } finally {
+                    busy = false;
+                    if (current()) updateDisclosure();
+                }
+            } else if (action === 'plan-batches' && session && !draft) {
                 draft = createDeepConsolidationDraft(prepared.capture, session);
                 consent.checked = false;
                 updateDisclosure();

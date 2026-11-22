@@ -42,6 +42,9 @@ import {
 import { captureLedgerReview, validateLedgerProposal, originalLedgerProposal, patchLedgerProposal } from '../knowledge/ledger_cleanup.js';
 import { estimateTokens } from '../core/context.js';
 import { buildBackupEnvelope } from '../backup/data.js';
+import { captureDeepConsolidationReview } from '../knowledge/deep_consolidation.js';
+import { createDeepConsolidationDraft, getDeepConsolidationDraft, _resetDeepConsolidationDraftsForTests } from '../knowledge/deep_consolidation_batches.js';
+import { handoffDeepConsolidationDraft } from '../knowledge/deep_consolidation_handoff.js';
 
 // ─── Harness (mirrors test/knowledge_cleanup_commit.test.js) ─────────────────
 
@@ -153,7 +156,7 @@ test('experimental NPC action opens a separate read-only preview without generat
     await vi.waitFor(() => expect(document.getElementById('kt-deep-consolidation-modal')).toBeTruthy());
     const modal = document.getElementById('kt-deep-consolidation-modal');
     expect(button.disabled).toBe(false);
-    expect(modal.textContent).toContain('Experimental batches (v2 Phase 2)');
+    expect(modal.textContent).toContain('Experimental batches (v2 Phase 3)');
     expect(apiRequests).toHaveLength(0);
     expect(wiFake.saveCalls).toBe(saves);
     expect(entry7().content).toBe(ORIGINAL);
@@ -197,6 +200,7 @@ beforeEach(() => {
     _resetEpoch();
     _clearCacheForTests();
     _resetCleanupDraftsForTests();
+    _resetDeepConsolidationDraftsForTests();
     saveSettings({ scope: 'global', connectionProfileId: 'test-profile' });
     _setCacheForTests(BOOK, { registry: {
         [NPC]: { uid: 7, type: 'major', keywords: [NPC], entityId: 'ent-1' },
@@ -232,6 +236,39 @@ afterEach(() => {
 });
 
 // ─── Invocation and disclosure ───────────────────────────────────────────────
+
+test.each(['success', 'failure'])('deep hand-off uses existing Apply and recovery: %s', async outcome => {
+    seedBook();
+    const { capture } = await prepareLedgerCleanup({ name: NPC, uid: 7 });
+    const selection = captureDeepConsolidationReview(ORIGINAL);
+    const draft = createDeepConsolidationDraft(capture, { selection, groups: [{ label: 'Wharf', s: [1, 2] }] });
+    draft.batches[0].status = 'accepted';
+    draft.batches[0].result = {
+        records: [{ s: [1, 2], text: 'x'.repeat(1000), notes: 'Deep merge' }], pruningSuggestions: [], notes: '',
+    };
+    await handoffDeepConsolidationDraft(draft);
+    expect(wiFake.saveCalls).toBe(0);
+    await openLedgerCleanupReviewModal(NPC, 7, { resumeDraft: true });
+    expect(body().querySelector('.kt-condense-records')).toBeTruthy();
+    expect(body().querySelector('.kt-condense-text').value).toHaveLength(1000);
+    expect(apiRequests).toHaveLength(0);
+    body().querySelector('.kt-condense-apply').click();
+    if (outcome === 'failure') wiFake.failSaveAt = 1;
+    body().querySelector('.kt-condense-confirm-apply').click();
+    if (outcome === 'failure') {
+        await vi.waitFor(() => expect(statusText()).toContain('NOT changed'));
+        expect(getDeepConsolidationDraft(capture)).toBe(draft);
+        expect(getCleanupDraft(capture)).toBeTruthy();
+        expect(entry7().content).toBe(ORIGINAL);
+    } else {
+        await vi.waitFor(() => expect(body().querySelector('.kt-condense-applied')).toBeTruthy());
+        expect(entry7().content).toContain('x'.repeat(1000));
+        expect(getDeepConsolidationDraft(capture)).toBeNull();
+        expect(getCleanupDraft(capture)).toBeNull();
+        body().querySelector('.kt-condense-undo').click();
+        await vi.waitFor(() => expect(entry7().content).toBe(ORIGINAL));
+    }
+});
 
 describe('explicit invocation and disclosure', () => {
     test('the Condense button opens the review modal; a double click stacks nothing', async () => {

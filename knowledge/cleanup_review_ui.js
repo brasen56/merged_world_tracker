@@ -29,6 +29,7 @@ import { validateBackupEnvelope } from '../backup/validate.js';
 import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { ktSetStatus } from './state.js';
 import { getLorebookName } from './scope.js';
+import { clearDeepConsolidationDraft } from './deep_consolidation_batches.js';
 import {
     prepareLedgerCleanup,
     estimateLedgerCleanup,
@@ -159,7 +160,7 @@ let reviewOpening = false;
  * an ineligible ledger opens the modal in an explain-only state — nothing is
  * ever rewritten to make an entry eligible.
  */
-export async function openLedgerCleanupReviewModal(name, uid) {
+export async function openLedgerCleanupReviewModal(name, uid, { resumeDraft = false } = {}) {
     if (document.getElementById(REVIEW_MODAL_ID) || reviewOpening) return;
     reviewOpening = true;
     const scope = captureScope();
@@ -168,7 +169,7 @@ export async function openLedgerCleanupReviewModal(name, uid) {
         // A chat switch during the awaited load detaches everything — the
         // sweep closes any open modal, so just drop this open.
         if (!scopeStillCurrent(scope).ok) return;
-        openReviewModalShell(name, prepared);
+        return openReviewModalShell(name, prepared, { resumeDraft });
     } catch (err) {
         if (!scopeStillCurrent(scope).ok) return;
         ktSetStatus(`Condense unavailable for "${name}": ${err.message}`, 'error');
@@ -209,7 +210,7 @@ function openCaptureRefusalModal(name, err) {
     if (!showModal(REVIEW_MODAL_ID)) modal._closeModal?.();
 }
 
-function openReviewModalShell(name, { capture, eligibility }) {
+function openReviewModalShell(name, { capture, eligibility }, { resumeDraft = false } = {}) {
     const modal = document.createElement('div');
     modal.id = REVIEW_MODAL_ID;
     modal.className = 'mwt-modal kt-condense-modal';
@@ -271,7 +272,13 @@ function openReviewModalShell(name, { capture, eligibility }) {
     };
     const content = () => modal.querySelector('.kt-condense-content');
 
-    if (!eligibility.ok || eligibility.empty) {
+    const retained = resumeDraft ? getCleanupDraft(capture) : null;
+    if (retained && retained.review.original === capture.originalContent) {
+        session.review = retained.review;
+        session.proposal = retained.proposal;
+        session.decisions = retained.decisions || { removals: [] };
+        renderReview();
+    } else if (!eligibility.ok || eligibility.empty) {
         renderExplain();
     } else {
         renderDisclose({ keepConsent: false });
@@ -938,6 +945,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
                 if (!scopeStillCurrent(session.scope).ok) { modal._closeModal?.(); return; }
                 if (result?.ok) {
                     clearCleanupDraft(capture);
+                    clearDeepConsolidationDraft(capture);
                     session.applied = result;
                     session.confirming = false;
                     renderApplied();
@@ -1047,6 +1055,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
             btn.addEventListener('click', () => { openCleanupRecoveryModal(); });
         });
     }
+    return modal;
 }
 
 // ─── Recovery manager modal ──────────────────────────────────────────────────

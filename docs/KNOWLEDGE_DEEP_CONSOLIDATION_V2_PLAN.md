@@ -1,10 +1,10 @@
 # Knowledge Tracker — deep consolidation v2 (batched, no archive)
 
-**Status:** In progress; Phases 0–2 done 2026-11-22. Batch execution has in-memory progress; no Condense hand-off yet. The Phase 3 opt-in character-limit prerequisite landed with Phase 2.
+**Status:** In progress; Phases 0–3 done 2026-11-22. Batch execution has in-memory progress and a validated hand-off to the existing Condense review. Append-safe resume and export/import remain Phase 4.
 **Date:** 2026-11-22
 **Replaces:** [KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md](./KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md) (the v1 build checklist; its §5 verdict was never reached).
 **Background:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — the original problem statement and the appended response.
-**Release boundary:** Private experimental branch. The shipped 🧹 Condense path stays byte-identical except for the one opt-in seam in Phase 3.
+**Release boundary:** Private experimental branch. Normal 🧹 Condense behavior stays unchanged; shared additions are the bounded opt-in character limit, an opt-in retained-draft review entry point, and deep-draft clearing after successful Apply.
 
 ## 1. Why v1 is being replaced
 
@@ -192,18 +192,39 @@ model call or SillyTavern-host trial was performed.
       `validateLedgerReplacement`) validates through the review, they all
       follow with no signature changes. Tests pin the default reviews and
       messages unchanged.
-- [ ] Assemble: capture the entry fresh, build a full review with
+- [x] Assemble: capture the entry fresh, build a full review with
       `maxRecordChars: 1200`, then make records. Accepted batch records map
       onto the fresh source ids. Every other source (pins, recent, ungrouped,
       singleton, failed, pending) becomes an exact original. Sort by earliest
       source and run `validateLedgerProposal` before handing off.
-- [ ] `stashPreviousCleanupDraft(capture)`, then
+- [x] `stashPreviousCleanupDraft(capture)`, then
       `saveCleanupDraft(capture, { review, proposal, decisions: { removals: [] } })`,
       then open the Condense review at its review step. Edit, keep originals,
       removals, apply, recovery, and restore are all existing code.
-- [ ] Partial hand-off is allowed: any number of accepted batches.
-- [ ] Clear the deep draft where Condense clears its own after a successful
+- [x] Partial hand-off is allowed: any number of accepted batches.
+- [x] Clear the deep draft where Condense clears its own after a successful
       apply (knowledge/cleanup_review_ui.js:940).
+
+Phase 3 implementation: `knowledge/deep_consolidation_handoff.js` captures the
+destination fresh, requires the same identity and exact entry revision, revalidates
+each accepted mini-ledger, remaps ledger numbers to fresh full-review source IDs,
+and validates complete source coverage before stashing/saving a Condense draft.
+All other sources remain exact originals; pruning suggestions remain advisory.
+Zero accepted batches is allowed. A running draft cannot be handed off.
+
+The experimental modal offers **Review in Condense** without additional model
+consent or calls. `openLedgerCleanupReviewModal(name, uid, { resumeDraft: true })`
+opens the retained draft directly at review only when its original matches a new
+capture; otherwise the existing stale-draft disclosure/export path is shown.
+The deep draft remains available until discard or successful Condense Apply;
+failed Apply retains both drafts. Recovery labels remain Condense labels.
+
+Phase 3 validation (2026-11-22): full Vitest suite, lint and whitespace checks
+passed. Tests cover partial/zero-result assembly, exact whitespace/EOL preservation,
+fresh IDs, advisory mappings, accepted-batch revalidation, stashing order, scope
+changes/cancellation, stale-entry refusal, direct review opening without another
+call, 1,200-character Apply, failed-Apply retention, and existing recovery Undo.
+No live paid model call or SillyTavern-host trial was performed.
 
 ### Phase 4 — resume across scans, export/import
 
@@ -288,9 +309,8 @@ model call or SillyTavern-host trial was performed.
 
 - Starting batch caps (30 sources / 3,000 ledger tokens proposed).
 - Phase 5 store, if Phase 5 is needed at all.
-- Whether the hand-off opens the Condense review directly (needs a small entry
-  point on `openLedgerCleanupReviewModal`) or the user clicks its existing
-  Resume button.
+- Resolved in Phase 3: hand-off opens the Condense review directly through an
+  opt-in retained-draft entry point; normal Condense still opens disclosure.
 - Whether deep runs get their own recovery label (landmine 10).
 
 ## 9. Results

@@ -5,7 +5,7 @@ import { releaseManagedInert } from '../core/modal.js';
 import { captureScope, _resetEpoch, bumpEpoch } from '../core/scope.js';
 import { captureCleanupTarget } from '../knowledge/cleanup_commit.js';
 import { ktFetchFromApi } from '../knowledge/lorebook.js';
-import { cleanupModelDisclosure } from '../knowledge/cleanup_review.js';
+import { cleanupModelDisclosure, _resetCleanupDraftsForTests, getCleanupDraft } from '../knowledge/cleanup_review.js';
 import { openDeepConsolidationPreviewModal } from '../knowledge/deep_consolidation_review_ui.js';
 import { _resetDeepConsolidationDraftsForTests } from '../knowledge/deep_consolidation_batches.js';
 
@@ -33,6 +33,7 @@ async function generate() {
 beforeEach(() => {
     resetCoreStubs(); _resetEpoch(); vi.clearAllMocks();
     _resetDeepConsolidationDraftsForTests();
+    _resetCleanupDraftsForTests();
     document.body.innerHTML = '';
     captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original, scopeToken: captureScope() }));
     cleanupModelDisclosure.mockReturnValue({ source: 'custom', mode: 'custom', modelName: 'test-model', maxTokens: 8000 });
@@ -40,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => {
     find('#kt-deep-consolidation-modal')?._closeModal();
+    find('#kt-ledger-review-modal')?._closeModal();
     releaseManagedInert(); document.body.innerHTML = ''; vi.restoreAllMocks();
 });
 
@@ -220,4 +222,25 @@ it('blocks changed-revision draft resume rather than sending replacement sources
     find('[data-deep-consent]').click();
     expect(action('run-batches').disabled).toBe(true);
     expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+});
+
+it('hands off without consent or another model call and opens the Condense editor directly', async () => {
+    await open(); await generate(); action('plan-batches').click();
+    expect(find('[data-deep-consent]').checked).toBe(false);
+    expect(action('handoff').disabled).toBe(false);
+    action('handoff').click();
+    await vi.waitFor(() => expect(find('.kt-condense-records')).toBeTruthy());
+    expect(find('#kt-deep-consolidation-modal')).toBeNull();
+    expect(find('.kt-condense-consent-box')).toBeNull();
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    expect(getCleanupDraft({ bookName: 'Test', name: 'Mara', uid: 7 }).review.maxRecordChars).toBe(1200);
+});
+
+it('refuses a hand-off if the live entry changed after the modal opened', async () => {
+    await open(); await generate(); action('plan-batches').click();
+    captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original + '\r\n- scan', scopeToken: captureScope() });
+    action('handoff').click();
+    await vi.waitFor(() => expect(find('.mwt-status').textContent).toContain('changed'));
+    expect(find('#kt-ledger-review-modal')).toBeNull();
+    expect(getCleanupDraft({ bookName: 'Test', name: 'Mara', uid: 7 })).toBeNull();
 });
