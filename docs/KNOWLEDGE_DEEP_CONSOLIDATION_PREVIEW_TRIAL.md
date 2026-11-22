@@ -1,7 +1,10 @@
 # Knowledge Tracker — deep consolidation preview trial
 
-**Status:** Build checklist for the first experiment; implements the review
-response's point 2 (answer the core question before building the archive).
+**Status:** Superseded 2026-11-22 by [KNOWLEDGE_DEEP_CONSOLIDATION_V2_PLAN.md](./KNOWLEDGE_DEEP_CONSOLIDATION_V2_PLAN.md)
+(batched, no archive). Sections A–E were built; §5 was never reached because no
+large ledger produced a valid proposal. Kept for §3F's probe protocol, which v2
+Phase 6 reuses. Originally: build checklist for the first experiment; implements
+the review response's point 2 (answer the core question before building the archive).
 **Date:** 2026-11-03
 **Companion doc:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — scope §3 and the appended response.
 **Release boundary:** Private experimental branch; the shipped 🧹 Condense path stays byte-identical.
