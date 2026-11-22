@@ -12,12 +12,13 @@ import { runDeepConsolidationBatches, estimateDeepBatchRequest } from './deep_co
 import { handoffDeepConsolidationDraft } from './deep_consolidation_handoff.js';
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
 import { pickTextFile } from '../core/file.js';
-import { captureCleanupTarget } from './cleanup_commit.js';
 import { exportDeepConsolidationDraft, importDeepConsolidationDraft } from './deep_consolidation_draft_io.js';
 
 const ID = 'kt-deep-consolidation-modal';
 const esc = value => escapeHtml(String(value ?? ''));
 const button = (action, label, extra = '') => `<button type="button" class="mwt-btn" data-deep-action="${action}" ${extra}>${label}</button>`;
+// A runner can outlive its modal while an aborted transport settles.
+let activeDraftProgress = null;
 
 export async function openDeepConsolidationPreviewModal(name, uid) {
     if (document.getElementById(ID)) return;
@@ -40,18 +41,18 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     const modal = createModal({ id: ID, title: `Experimental: Deep Consolidate — ${name}`,
         cssClass: 'kt-deep-preview', destroyOnClose: true,
         content: '<div class="kt-deep-content"></div>',
-        onClose: () => { closed = true; controller?.abort(); failedResponse = null; },
+        onClose: () => {
+            closed = true;
+            controller?.abort();
+            failedResponse = null;
+            if (activeDraftProgress === refreshDraftProgress) activeDraftProgress = null;
+        },
     });
     const body = modal.querySelector('.kt-deep-content');
     const current = () => !closed && modal.isConnected && scopeStillCurrent(scope).ok;
     const intro = '<p><strong>Experimental batches (v2 Phase 4).</strong> Batch results stay in memory when this modal closes and survive appended scans. Export a private JSON backup before page reload; there is no autosave. Imported results are revalidated locally. Hand off completed work to Condense to edit or explicitly apply with recovery. Nothing is written to the Knowledge entry before Apply.</p>';
-    const sources = prepared.selection?.review.sources || [];
     body.innerHTML = `${intro}<p>Draft files contain private source text, accepted records, and retained failed responses. Store them securely. Discard the current draft before importing another.</p>${button('import-draft', 'Import draft JSON')}
-        <fieldset class="kt-deep-config"><legend>1. Choose sources</legend>
-            <label>Inclusive boundary (ledger source number)<input class="mwt-input" data-deep-boundary type="number" min="1" max="${sources.length}" value="${sources.length}"></label>
-            <p>Only sources at or above the boundary, minus pins, are sent. Pins and later lines stay exact.</p>
-            <details><summary>Source table and pins</summary>${sources.map(source => `<label class="kt-deep-source"><input type="checkbox" data-deep-pin="${source.order + 1}"> Pin s${source.order + 1}: <span>${esc(source.text)}</span></label>`).join('')}</details>
-        </fieldset>
+        <fieldset class="kt-deep-config"></fieldset>
         <div class="kt-deep-disclosure"></div>
         <label><input type="checkbox" data-deep-consent> I consent to sending the selected non-pinned lines and NPC name to the disclosed Knowledge endpoint (one billable attempt per generation; no automatic retry).</label>
         <div class="kt-condense-actions">${button('generate', 'Generate subject groups')}${button('position', 'Group by position (no model call)')}${button('cancel', 'Cancel request', 'hidden')}</div>
@@ -66,10 +67,23 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     const cancel = body.querySelector('[data-deep-action="cancel"]');
     const failure = body.querySelector('.kt-deep-failure');
     const consent = body.querySelector('[data-deep-consent]');
-    const boundary = body.querySelector('[data-deep-boundary]');
+    let boundary;
     let options;
     let selected;
     let requestOK = false;
+
+    function renderSourceControls() {
+        const sources = prepared.selection?.review.sources || [];
+        config.innerHTML = `<legend>1. Choose sources</legend>
+            <label>Inclusive boundary (ledger source number)<input class="mwt-input" data-deep-boundary type="number" min="1" max="${sources.length}" value="${sources.length}"></label>
+            <p>Only sources at or above the boundary, minus pins, are sent. Pins and later lines stay exact.</p>
+            <details><summary>Source table and pins</summary>${sources.map(source => `<label class="kt-deep-source"><input type="checkbox" data-deep-pin="${source.order + 1}"> Pin s${source.order + 1}: <span>${esc(source.text)}</span></label>`).join('')}</details>`;
+        boundary = config.querySelector('[data-deep-boundary]');
+    }
+
+    function refreshDraftProgress(changedDraft) {
+        if (draft === changedDraft && current()) renderBatches();
+    }
 
     function updateDisclosure() {
         requestOK = false;
@@ -184,11 +198,15 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                 try {
                     const text = await pickTextFile('.json');
                     if (!text || !current()) return;
-                    const capture = await captureCleanupTarget({ name, uid });
+                    const refreshed = await prepareDeepConsolidation({ name, uid });
+                    const { capture } = refreshed;
                     if (!current() || !scopeStillCurrent(capture.scopeToken).ok) return;
                     const imported = importDeepConsolidationDraft(text, capture);
-                    prepared.capture = capture;
+                    prepared = refreshed;
                     draft = imported.draft;
+                    session = null;
+                    renderSourceControls();
+                    renderReview();
                     consent.checked = false;
                     setStatus(modal, imported.matches ? 'Draft imported and revalidated. Consent again before any model call.' : 'Draft imported as stale: export-only; no model call or Apply is allowed.');
                 } finally {
@@ -224,7 +242,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
                 try {
                     await runDeepConsolidationBatches(draft, { signal: controller.signal,
                         mode: action === 'run-batches' ? 'pending' : 'failed', batchId: control.dataset.batchId,
-                        onProgress: () => { if (current()) renderBatches(); } });
+                        onProgress: changedDraft => activeDraftProgress?.(changedDraft) });
                     if (current()) setStatus(modal, 'Batch run finished. Accepted work is retained in memory; nothing was applied.', 'success');
                 } finally {
                     busy = false;
@@ -298,6 +316,8 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
             }
         }
     });
+    activeDraftProgress = refreshDraftProgress;
+    renderSourceControls();
     updateDisclosure();
     setModalOpener(modal, opener);
     showModal(ID);

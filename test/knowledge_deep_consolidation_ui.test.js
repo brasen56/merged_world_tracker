@@ -227,6 +227,31 @@ it('allows appended scans on reopen, but still requires fresh consent', async ()
     expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
 });
 
+it('refreshes reopened batch controls when a cancelled transport settles after reopening', async () => {
+    const modal = await open(); await generate(); action('plan-batches').click();
+    let resolve;
+    ktFetchFromApi.mockImplementation(() => new Promise(done => { resolve = done; }));
+    find('[data-deep-consent]').click(); action('run-batches').click();
+    await vi.waitFor(() => expect(resolve).toBeTruthy());
+    const args = ktFetchFromApi.mock.calls[1];
+    modal._closeModal();
+    expect(args[2].signal.aborted).toBe(true);
+    const reopened = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    find('[data-deep-consent]').click();
+    expect(action('run-batches').disabled).toBe(true);
+    expect(action('discard-draft').disabled).toBe(true);
+    expect(action('handoff').disabled).toBe(true);
+    resolve(batchAnswer(...args));
+    await vi.waitFor(() => expect(action('discard-draft').disabled).toBe(false));
+    expect(action('run-batches').disabled).toBe(false);
+    expect(action('handoff').disabled).toBe(false);
+    expect(reopened.textContent).toContain('0 accepted / 2 planned');
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(2);
+    ktFetchFromApi.mockImplementation(batchAnswer);
+    action('run-batches').click();
+    await vi.waitFor(() => expect(reopened.textContent).toContain('1 accepted / 2 planned'));
+});
+
 it('hands off without consent or another model call and opens the Condense editor directly', async () => {
     await open(); await generate(); action('plan-batches').click();
     expect(find('[data-deep-consent]').checked).toBe(false);
@@ -278,6 +303,31 @@ it('keeps a stale draft exportable even when the ledger is removed and blocks pa
     action('export-draft').click();
     expect(getFakeDownloadJsonCalls()[0].data.snapshot).toHaveLength(4);
     expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+});
+
+it('refreshes displayed sources and clears prior groups when importing then discarding a stale draft', async () => {
+    const modal = await open(); await generate(); action('plan-batches').click();
+    action('export-draft').click();
+    const packet = getFakeDownloadJsonCalls()[0].data;
+    action('discard-draft').click();
+    action('position').click();
+    expect(find('[data-deep-label]')).toBeTruthy();
+    const changed = original.replace('- gate', '- CHANGED GATE') + '\r\n- NEW SOURCE';
+    captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: changed, scopeToken: captureScope() }));
+    pickTextFile.mockResolvedValue(JSON.stringify(packet));
+    action('import-draft').click();
+    await vi.waitFor(() => expect(modal.textContent).toContain('Draft imported as stale'));
+    expect(action('handoff').disabled).toBe(true);
+    expect(find('.kt-deep-config').textContent).toContain('CHANGED GATE');
+    expect(find('.kt-deep-config').textContent).toContain('NEW SOURCE');
+    expect(find('[data-deep-boundary]').max).toBe('6');
+    expect(find('[data-deep-label]')).toBeNull();
+    action('discard-draft').click();
+    expect(find('[data-deep-consent]').checked).toBe(false);
+    expect(action('generate').disabled).toBe(true);
+    await generate();
+    expect(ktFetchFromApi.mock.calls[1][1]).toContain('CHANGED GATE');
+    expect(ktFetchFromApi.mock.calls[1][1]).not.toContain('PRIVATE PIN');
 });
 
 it('does not import a late file after the modal closes', async () => {
