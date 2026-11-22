@@ -10,7 +10,8 @@ import { structuralRejection } from './field_contract.js';
 
 export const DEEP_CONSOLIDATION_WIRE_VERSION = 3;
 /** Changed deep-consolidation lines only; normal ledger fact limits are unchanged. */
-export const DEEP_CONSOLIDATION_MAX_CHARS = 1200;
+export { DEEP_CONSOLIDATION_MAX_CHARS } from './deep_consolidation_limits.js';
+import { DEEP_CONSOLIDATION_MAX_CHARS } from './deep_consolidation_limits.js';
 const fail = reason => ({ ok: false, reason });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, required, optional = []) => object(value) &&

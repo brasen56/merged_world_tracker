@@ -1,6 +1,6 @@
 # Knowledge Tracker — deep consolidation v2 (batched, no archive)
 
-**Status:** In progress; Phases 0–1 done 2026-11-22. Phase 1 is grouping-only; no batch execution or hand-off yet.
+**Status:** In progress; Phases 0–2 done 2026-11-22. Batch execution has in-memory progress; no Condense hand-off yet. The Phase 3 opt-in character-limit prerequisite landed with Phase 2.
 **Date:** 2026-11-22
 **Replaces:** [KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md](./KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md) (the v1 build checklist; its §5 verdict was never reached).
 **Background:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — the original problem statement and the appended response.
@@ -121,37 +121,68 @@ are no longer used by the modal; remove them alongside the later migration.
 
 ### Phase 2 — batch runner (with in-memory progress)
 
-- [ ] `planBatches(groups, { maxSources, maxTokens })`, pure: singleton groups
+- [x] `planBatches(groups, { maxSources, maxTokens })`, pure: singleton groups
       make no call; a group within the caps is one batch; a larger group is
       split by ledger order into near-equal chunks. Starting caps:
       `BATCH_MAX_SOURCES = 30`, `BATCH_MAX_TOKENS = 3000` ledger tokens (tune
       from Phase 6 data).
-- [ ] **Batch review = a synthetic mini-ledger.** Build
+- [x] **Batch review = a synthetic mini-ledger.** Build
       `"Knowledge Ledger:\n" + batchSourceTexts.join('\n')` and capture it with
       `captureLedgerReview(content, batchReviewId, { maxRecordChars: 1200 })`.
       The model sees `[s1]…[sk]`. `expandKeepListProposal` and
       `validateLedgerProposal` then work unchanged on the batch, and results
       map back to ledger source numbers by position in the batch.
-- [ ] Batch prompt: a sibling of `LEDGER_CLEANUP_PROMPT` (knowledge/prompts.js:547)
+- [x] Batch prompt: a sibling of `LEDGER_CLEANUP_PROMPT` (knowledge/prompts.js:547)
       with the same rules, plus: every line is about one subject
       (`<subject>label</subject>`); merge into as few records as fit; the
       shared-tag grammar; the 1,200 hard limit and the 500–650 target. Much
       shorter than the v1 prompt: no archive, groups, or budget text.
-- [ ] Run batches one at a time with an AbortSignal. Check the scope after
+- [x] Run batches one at a time with an AbortSignal. Check the scope after
       each call (v1's `assertCurrent` pattern). Statuses: pending / running /
       accepted / failed / skipped. A failed batch keeps its stage, reason, and
       raw response (downloadable, never logged), as v1 does now.
-- [ ] Retry one failed batch, or all of them. Each retry captures a fresh
+- [x] Retry one failed batch, or all of them. Each retry captures a fresh
       batch review id.
-- [ ] Each batch records finish reason and completion tokens in Diagnostics,
+- [x] Each batch records finish reason and completion tokens in Diagnostics,
       matched by its own batch review id.
-- [ ] Progress lives in a module-level draft map keyed like Condense drafts
+- [x] Progress lives in a module-level draft map keyed like Condense drafts
       (`scopeKey|bookName|name|uid`, knowledge/cleanup_review.js:428). Closing
       the modal mid-run and reopening resumes at the next pending batch.
 
+Phase 2 implementation: `knowledge/deep_consolidation_batches.js` owns planning,
+synthetic captures, ledger-number result mappings and the origin-keyed draft map.
+`planBatches` also takes the captured `sources` table in its options so token
+measurement is pure and explicit. Contiguous partitions minimize chunk count,
+then source-count imbalance; an indivisible over-token-cap line is skipped and
+kept exact, never sent over the cap. Singletons (including split-off singletons)
+also stay exact. `deep_consolidation_batch_prompt.js` and
+`deep_consolidation_batch_request.js` own the sibling prompt, per-call budget,
+one-attempt requests, diagnostics and sequential runner. Failures retain private
+raw responses in memory for per-batch download; diagnostics never log response
+text or native/validator messages that could quote it.
+
+The modal now offers Plan batches, Run/resume pending, Retry one/all failures,
+failure download, and explicit discard. Planning freezes groups and requires
+fresh consent before batch calls; reopening also requires consent to continue.
+Cancel/close returns an interrupted batch to its preceding status while retaining
+accepted work. Reopen is exact-entry-revision-only until Phase 4; changed content
+is blocked, not silently substituted. There is no reload persistence or hand-off.
+The bounded review character-limit seam below was brought forward as a required
+dependency; its shared constant lives in `deep_consolidation_limits.js` to avoid
+a capture/validator import cycle and is re-exported by `deep_consolidation.js`.
+
+Phase 2 validation (2026-11-22): `npm test` — 220 files, 5,613 tests passed;
+`npm run lint` and `git diff --check` passed. Coverage includes ordered balanced
+splitting under both caps, skipped singletons/oversized lines, exact whitespace,
+local-to-ledger mappings, default/opt-in limits through shared review helpers,
+sequential execution, failure stages, explicit retries with fresh identities,
+matched privacy-safe diagnostics, cancellation/late responses, scoped drafts,
+modal close/reopen, fresh consent, and changed-revision refusal. No live paid
+model call or SillyTavern-host trial was performed.
+
 ### Phase 3 — hand-off to the Condense review
 
-- [ ] **One opt-in seam in knowledge/ledger_cleanup.js:**
+- [x] **One opt-in seam in knowledge/ledger_cleanup.js:** (prerequisite landed in Phase 2)
       `captureLedgerReview(content, reviewId, { maxRecordChars } = {})` stores
       `maxRecordChars` on the frozen review. `validateLedgerProposal` uses
       `review.maxRecordChars ?? LEDGER_ITEM_LIMITS.fact` at line 235.

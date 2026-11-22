@@ -13,6 +13,7 @@
  */
 
 import { structuralRejection, LEDGER_ITEM_LIMITS } from './field_contract.js';
+import { DEEP_CONSOLIDATION_MAX_CHARS } from './deep_consolidation_limits.js';
 
 export const LEDGER_PROPOSAL_VERSION = 1;
 const fail = (reason) => ({ ok: false, reason });
@@ -68,15 +69,17 @@ export function ledgerSpan(content) {
  * fresh reviewId for EACH generation (even against identical content); never
  * reuse one for a regenerated source. Exact original content is also bound.
  */
-export function captureLedgerReview(content, reviewId) {
+export function captureLedgerReview(content, reviewId, { maxRecordChars } = {}) {
     if (!nonempty(reviewId)) throw new Error('A fresh review ID is required.');
+    if (!validRecordLimit(maxRecordChars)) throw new Error('Invalid captured record character limit.');
     const parsed = parseLedger(content);
     if (!parsed.ok || parsed.empty) throw new Error(parsed.reason);
     const sources = parsed.items.map((item, index) => Object.freeze({
         id: `${reviewId}:source:${index + 1}`, order: index,
         text: item.text, eol: item.eol, start: item.start, end: item.end,
     }));
-    return Object.freeze({ reviewId, original: content, sources: Object.freeze(sources) });
+    return Object.freeze({ reviewId, original: content, sources: Object.freeze(sources),
+        ...(maxRecordChars === undefined ? {} : { maxRecordChars }) });
 }
 
 /** Numeric locations are safe to log. Native error messages can quote ledger
@@ -125,8 +128,12 @@ export function parseLedgerProposal(text) {
     }
 }
 
+const validRecordLimit = value => value === undefined ||
+    (Number.isInteger(value) && value >= LEDGER_ITEM_LIMITS.fact && value <= DEEP_CONSOLIDATION_MAX_CHARS);
+
 function checkReview(review) {
     if (!object(review) || !nonempty(review.reviewId) || typeof review.original !== 'string') return fail('Invalid captured review.');
+    if (!validRecordLimit(review.maxRecordChars)) return fail('Invalid captured record character limit.');
     const parsed = parseLedger(review.original);
     if (!parsed.ok || parsed.empty || !Array.isArray(review.sources) || parsed.items.length !== review.sources.length) return fail('Invalid captured source table.');
     for (let i = 0; i < parsed.items.length; i++) {
@@ -232,7 +239,8 @@ export function validateLedgerProposal(review, proposal, decisions = { removals:
         const structure = structuralRejection(record.text);
         if (structure) return fail(`Invalid ledger record: ${structure}.`);
         if (record.text.trim() === '(no entries yet)') return fail('An empty-ledger placeholder cannot represent source coverage. Use explicit removals instead.');
-        if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) return fail(`Ledger record exceeds the ${LEDGER_ITEM_LIMITS.fact}-character bound.`);
+        const limit = review.maxRecordChars ?? LEDGER_ITEM_LIMITS.fact;
+        if (!exact && record.text.length > limit) return fail(`Ledger record exceeds the ${limit}-character bound.`);
         // A line kept exactly as written changed nothing, so it has nothing to warn about.
         if (!exact) for (const warning of ledgerDetailWarnings(sources, record.text)) warnings.push({ recordId: record.id, ...warning });
     }

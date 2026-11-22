@@ -7,6 +7,7 @@ import { captureCleanupTarget } from '../knowledge/cleanup_commit.js';
 import { ktFetchFromApi } from '../knowledge/lorebook.js';
 import { cleanupModelDisclosure } from '../knowledge/cleanup_review.js';
 import { openDeepConsolidationPreviewModal } from '../knowledge/deep_consolidation_review_ui.js';
+import { _resetDeepConsolidationDraftsForTests } from '../knowledge/deep_consolidation_batches.js';
 
 vi.mock('../knowledge/cleanup_commit.js', () => ({ captureCleanupTarget: vi.fn() }));
 vi.mock('../knowledge/lorebook.js', () => ({ ktFetchFromApi: vi.fn() }));
@@ -31,6 +32,7 @@ async function generate() {
 }
 beforeEach(() => {
     resetCoreStubs(); _resetEpoch(); vi.clearAllMocks();
+    _resetDeepConsolidationDraftsForTests();
     document.body.innerHTML = '';
     captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original, scopeToken: captureScope() }));
     cleanupModelDisclosure.mockReturnValue({ source: 'custom', mode: 'custom', modelName: 'test-model', maxTokens: 8000 });
@@ -149,4 +151,73 @@ it('ignores late failures and actions from an old scope', async () => {
     expect(find('.kt-deep-failure').hidden).toBe(true);
     action('position').click();
     expect(find('[data-deep-label]')).toBeNull();
+});
+
+const batchAnswer = (_p, payload) => JSON.stringify({ version: 2,
+    reviewId: /<review_id>(.*?)<\/review_id>/.exec(payload)[1], keep: [1, 2], changed: [], pruningSuggestions: [] });
+
+it('plans locally, requires fresh batch consent, retains accepted work on reopen and discards explicitly', async () => {
+    let modal = await open(); await generate();
+    action('plan-batches').click();
+    expect(find('[data-deep-consent]').checked).toBe(false);
+    expect(action('run-batches').disabled).toBe(true);
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    ktFetchFromApi.mockImplementation(batchAnswer);
+    find('[data-deep-consent]').click(); action('run-batches').click();
+    await vi.waitFor(() => expect(modal.textContent).toContain('1 accepted / 2 planned'));
+    expect(modal.textContent).toContain('skipped');
+    expect(find('[data-deep-boundary]').disabled || find('.kt-deep-config').disabled).toBe(true);
+    modal._closeModal();
+    modal = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    expect(modal.textContent).toContain('1 accepted / 2 planned');
+    expect(action('run-batches').disabled).toBe(true);
+    expect(find('[data-deep-consent]').checked).toBe(false);
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(2);
+    action('discard-draft').click();
+    expect(find('.kt-deep-batches').textContent).toBe('');
+    expect(action('position').disabled).toBe(false);
+});
+
+it('downloads per-batch failures privately and explicitly retries without regenerating groups', async () => {
+    const modal = await open(); await generate(); action('plan-batches').click();
+    ktFetchFromApi.mockResolvedValue('PRIVATE BATCH RAW');
+    find('[data-deep-consent]').click(); action('run-batches').click();
+    await vi.waitFor(() => expect(action('retry-batch')).toBeTruthy());
+    expect(modal.textContent).not.toContain('PRIVATE BATCH RAW');
+    action('export-batch-failure').click();
+    expect(getFakeDownloadJsonCalls()[0].data.rawResponse).toBe('PRIVATE BATCH RAW');
+    ktFetchFromApi.mockImplementation(batchAnswer);
+    action('retry-batch').click();
+    await vi.waitFor(() => expect(modal.textContent).toContain('1 accepted / 2 planned'));
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(3);
+});
+
+it('close aborts a batch, ignores its late result and reopens at pending work', async () => {
+    let modal = await open(); await generate(); action('plan-batches').click();
+    let resolve;
+    ktFetchFromApi.mockImplementation(() => new Promise(done => { resolve = done; }));
+    find('[data-deep-consent]').click(); action('run-batches').click();
+    await vi.waitFor(() => expect(resolve).toBeTruthy());
+    const args = ktFetchFromApi.mock.calls[1];
+    modal._closeModal();
+    expect(args[2].signal.aborted).toBe(true);
+    resolve(batchAnswer(...args));
+    // Wait for the runner's finally to return the in-flight batch to pending.
+    await new Promise(done => setTimeout(done, 0));
+    modal = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    expect(modal.textContent).toContain('0 accepted / 2 planned');
+    expect(modal.textContent).toContain('pending');
+    ktFetchFromApi.mockImplementation(batchAnswer);
+    find('[data-deep-consent]').click(); action('run-batches').click();
+    await vi.waitFor(() => expect(modal.textContent).toContain('1 accepted / 2 planned'));
+});
+
+it('blocks changed-revision draft resume rather than sending replacement sources', async () => {
+    const modal = await open(); await generate(); action('plan-batches').click(); modal._closeModal();
+    captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original + '\r\n- appended', scopeToken: captureScope() }));
+    const reopened = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    expect(reopened.textContent).toContain('draft cannot resume');
+    find('[data-deep-consent]').click();
+    expect(action('run-batches').disabled).toBe(true);
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
 });
