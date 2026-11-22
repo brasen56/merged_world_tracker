@@ -63,6 +63,26 @@ describe('deep consolidation request', () => {
         expect(first.selection.review.reviewId).not.toBe(second.selection.review.reviewId);
     });
 
+    it('previews a complete proposal after an unclosed Markdown opener with full ownership and identity validation', async () => {
+        ktFetchFromApi.mockImplementation((...args) => '```json\n' + answer(...args));
+        const result = await requestDeepConsolidation(options());
+        expect(result.entryText).toBe(original);
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+
+        ktFetchFromApi.mockImplementation((...args) => {
+            const wire = JSON.parse(answer(...args));
+            wire.keep = [1];
+            return '```json\n' + JSON.stringify(wire);
+        });
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('Missing source coverage');
+        ktFetchFromApi.mockImplementation((...args) => {
+            const wire = JSON.parse(answer(...args));
+            wire.reviewId = 'stale';
+            return '```json\n' + JSON.stringify(wire);
+        });
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('reviewId did not match');
+    });
+
     it.each(['originalContent', 'bookName', 'entityId', 'uid', 'name'])('refuses a changed %s before dispatch', async key => {
         const expectedCapture = { name: 'Mara', uid: 7, bookName: 'Book', entityId: 'npc-id', originalContent: original, scopeToken: {} };
         captureCleanupTarget.mockResolvedValue({ ...expectedCapture, [key]: key === 'uid' ? 8 : 'changed' });

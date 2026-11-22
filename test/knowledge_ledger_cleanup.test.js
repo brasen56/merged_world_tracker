@@ -58,11 +58,21 @@ describe('D6 boundary parsing and exact patching', () => {
 });
 
 describe('strict cleanup JSON and complete source ownership', () => {
-    test('only complete JSON or a whole JSON fence is normalized', () => {
+    test('accepts complete JSON with an outer Markdown fence, including a missing closing marker', () => {
         const json = JSON.stringify(merge());
         expect(parseLedgerProposal(json).ok).toBe(true);
-        expect(parseLedgerProposal('```json\n' + json + '\n```').ok).toBe(true);
-        for (const bad of [json.slice(0, -1), json + ' trailing', 'prefix ' + json, '{"records":[],}', '[]', '```json\n' + json]) expect(parseLedgerProposal(bad).ok).toBe(false);
+        for (const [start, end] of [
+            ['```json\n', '\n```'],
+            ['```JSON \r\n', '\r\n  ```'],
+            ['```\n', '```'],
+            ['```json\n', ''],
+        ]) {
+            expect(parseLedgerProposal(start + json + end)).toEqual({ ok: true, proposal: merge() });
+        }
+        for (const bad of [json.slice(0, -1), json + ' trailing', 'prefix ' + json, '{"records":[],}', '[]',
+            '```json\n' + json.slice(0, -1), '```json\n' + json + '\n```\nExtra text',
+            '```json\n' + json + '\n```\n```json\n{}\n```',
+        ]) expect(parseLedgerProposal(bad).ok).toBe(false);
     });
     test('locates invalid JSON inside a fence and retains native errors separately from safe diagnostics', () => {
         const body = '{\r\n"notes": "PRIVATE-😀",\r\n}';
@@ -83,6 +93,9 @@ describe('strict cleanup JSON and complete source ownership', () => {
         } });
         const value = { notes: 'He said "enter" on C:\\path.' };
         expect(parseLedgerProposal(JSON.stringify(value))).toEqual({ ok: true, proposal: value });
+        expect(parseLedgerProposal('```json\n' + unfinished)).toMatchObject({ ok: false, diagnostics: {
+            fenced: true, fenceClosed: false, errorAtEnd: true,
+        } });
     });
     test('captured sources preserve order, exact text and revision-local IDs', () => {
         const review = capture();

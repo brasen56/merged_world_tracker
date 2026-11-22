@@ -95,14 +95,22 @@ function jsonErrorLocation(json, message) {
     return location ? { jsonErrorLine: Number(location[1]), jsonErrorColumn: Number(location[2]) } : {};
 }
 
-/** Strict JSON only. The sole wrapper normalization is ONE whole JSON fence.
- * Failure coordinates refer to the trimmed, unwrapped JSON body.
+/** Strict JSON with an optional outer Markdown JSON fence. Models sometimes
+ * omit the closing fence after a complete object. Remove the opening marker
+ * and any final closing marker, then require the ENTIRE body to parse.
+ * Failure coordinates refer to the unwrapped JSON body.
  */
 export function parseLedgerProposal(text) {
     if (typeof text !== 'string') return fail('Cleanup output must be JSON text.');
     let json = text.trim();
-    const fence = /^```(?:json)?\r?\n([\s\S]*?)\r?\n```$/i.exec(json);
-    if (fence) json = fence[1];
+    const fence = /^```(?:json)?[ \t]*\r?\n/i.exec(json);
+    let fenceClosed = false;
+    if (fence) {
+        json = json.slice(fence[0].length);
+        const closing = /(?:\r?\n)?[ \t]*```$/.exec(json);
+        fenceClosed = Boolean(closing);
+        if (closing) json = json.slice(0, closing.index);
+    }
     try {
         const proposal = JSON.parse(json);
         if (!object(proposal)) return fail('Cleanup output must be a JSON object.');
@@ -112,7 +120,7 @@ export function parseLedgerProposal(text) {
         const where = location.jsonErrorLine
             ? ` JSON parsing failed at line ${location.jsonErrorLine}, column ${location.jsonErrorColumn} of the JSON body.` : '';
         return { ...fail(`Cleanup output is not complete strict JSON.${where}`),
-            diagnostics: { responseChars: text.length, jsonChars: json.length, fenced: Boolean(fence), ...location },
+            diagnostics: { responseChars: text.length, jsonChars: json.length, fenced: Boolean(fence), fenceClosed, ...location },
             error: error.message };
     }
 }

@@ -105,6 +105,7 @@ describe('entry-only field cleanup orchestration and recovery', () => {
         ['JSON fence', '```json\n', '\n```'],
         ['plain fence', '```\n', '\n```'],
         ['CRLF fence and outer whitespace', ' \r\n```JSON\r\n', '\r\n```\r\n '],
+        ['opening JSON fence without a closing marker', '```json\n', ''],
     ])('accepts a complete proposal in one %s without writing or retrying', async (_label, prefix, suffix) => {
         const prepared = await prepare();
         const proposal = proposalFor(prepared);
