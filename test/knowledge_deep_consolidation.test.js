@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
     captureDeepConsolidationReview, buildDeepConsolidationUserContent,
     expandDeepConsolidationProposal, validateDeepConsolidationProposal,
+    DEEP_CONSOLIDATION_MAX_CHARS,
 } from '../knowledge/deep_consolidation.js';
+import { LEDGER_ITEM_LIMITS } from '../knowledge/field_contract.js';
 import { originalLedgerProposal, validateLedgerProposal, parseLedgerProposal } from '../knowledge/ledger_cleanup.js';
 import { expandKeepListProposal, CLEANUP_WIRE_VERSION } from '../knowledge/cleanup_review.js';
 import { prepareDeepConsolidation } from '../knowledge/deep_consolidation_capture.js';
@@ -81,21 +83,41 @@ describe('experimental wire and ownership', () => {
         const wire = { ...wireFor(selection), keep: [3, 1, 2], changed: [], archive: [], groups: [] };
         expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(true);
         wire.keep = [1];
-        wire.changed = [{ s: [2], t: 'a'.repeat(800) }, { s: [3], t: 'b'.repeat(800) }];
+        wire.changed = [{ s: [2], t: 'a'.repeat(1200) }, { s: [3], t: 'b'.repeat(1200) }];
         wire.groups = [{ s: [2, 3], label: 'Subject' }];
         expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(true);
         wire.changed[0].t += 'a';
         expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(false);
     });
 
-    it.each([801, 2400])('identifies an overlength record of %s characters after kept and changed records', length => {
+    it.each([801, 850, 1200])('accepts a changed record of %s characters under the dedicated cap', length => {
+        const selection = select();
+        const wire = wireFor(selection);
+        wire.changed[0].t = 'x'.repeat(length);
+        expect(expandDeepConsolidationProposal(selection, wire).ok).toBe(true);
+    });
+
+    it('keeps the normal fact and standard Condense limits independent', () => {
+        expect(DEEP_CONSOLIDATION_MAX_CHARS).toBe(1200);
+        expect(LEDGER_ITEM_LIMITS.fact).toBe(800);
+        const { review } = select();
+        const proposal = originalLedgerProposal(review);
+        proposal.records[0].text = 'x'.repeat(800);
+        expect(validateLedgerProposal(review, proposal).ok).toBe(true);
+        proposal.records[0].text += 'x';
+        expect(validateLedgerProposal(review, proposal)).toMatchObject({ ok: false,
+            reason: 'Ledger record exceeds the 800-character bound.',
+        });
+    });
+
+    it.each([1201, 2400])('identifies an overlength record of %s characters after kept and changed records', length => {
         const selection = select();
         const wire = { ...wireFor(selection), archive: [], changed: [
             { s: [2], t: 'Safe rewritten fact.' },
             { s: [3], t: 'x'.repeat(length) },
         ] };
         expect(expandDeepConsolidationProposal(selection, wire)).toEqual({ ok: false,
-            reason: `Consolidated record 3 (1-based position in proposal.records; sources: 3) has ${length} characters; the limit is 800 (${length - 800} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`,
+            reason: `Consolidated record 3 (1-based position in proposal.records; sources: 3) has ${length} characters; the limit is 1200 (${length - 1200} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`,
         });
     });
 
@@ -105,7 +127,7 @@ describe('experimental wire and ownership', () => {
         const { proposal } = expandDeepConsolidationProposal(selection, wire);
         proposal.records[1].text = 'x'.repeat(1601);
         expect(validateDeepConsolidationProposal(selection, proposal)).toMatchObject({ ok: false,
-            reason: expect.stringContaining('sources: 3, 2) has 1601 characters; the limit is 800 (801 over)'),
+            reason: expect.stringContaining('sources: 3, 2) has 1601 characters; the limit is 1200 (401 over)'),
         });
     });
 
@@ -168,7 +190,7 @@ describe('experimental wire and ownership', () => {
     });
 
     it('allows exact overlength legacy lines without weakening the bound for new records', () => {
-        const selection = captureDeepConsolidationReview(`Knowledge Ledger:\n- ${'x'.repeat(801)}`);
+        const selection = captureDeepConsolidationReview(`Knowledge Ledger:\n- ${'x'.repeat(1201)}`);
         expect(expandDeepConsolidationProposal(selection, {
             version: 3, reviewId: selection.review.reviewId, keep: [1], changed: [], archive: [], groups: [],
         }).ok).toBe(true);

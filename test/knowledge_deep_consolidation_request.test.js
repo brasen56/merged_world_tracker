@@ -189,6 +189,9 @@ describe('deep consolidation request', () => {
         const prompt = buildDeepConsolidationPrompt('fixture-id');
         expect(prompt).toContain('Grouping does not mean merging every source in the group into one record');
         expect(prompt).toContain('Aim for roughly 500–650 characters per record');
+        expect(prompt).toContain('at most 1200 characters, including provenance and dates');
+        expect(prompt).toContain('hard 1200-character limit');
+        expect(prompt).not.toContain('800-character limit');
         expect(prompt).toContain('including provenance and dates');
         expect(prompt).toContain('Never merge additional sources if doing so would exceed the limit');
         expect(prompt).toContain('If a single source cannot be safely rewritten within the limit, put it in keep instead');
@@ -200,15 +203,30 @@ describe('deep consolidation request', () => {
         expect(expandDeepConsolidationProposal(selection, { version: 3, reviewId: selection.review.reviewId, ...example }).ok).toBe(true);
     });
 
+    it('accepts a changed line above the normal fact cap through the request and preview', async () => {
+        const text = 'x'.repeat(850);
+        ktFetchFromApi.mockImplementation((...args) => {
+            const wire = JSON.parse(answer(...args));
+            wire.keep = [1];
+            wire.changed = [{ s: [2], t: text }];
+            wire.groups = [{ s: [2], label: 'Subject' }];
+            return JSON.stringify(wire);
+        });
+        const result = await requestDeepConsolidation(options());
+        expect(result.proposal.records[1].text).toBe(text);
+        expect(result.entryText).toBe(original.replace('- old fact', `- ${text}`));
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    });
+
     it('surfaces overlength details in the request error and diagnostics without logging text', async () => {
         ktFetchFromApi.mockImplementation((...args) => {
             const wire = JSON.parse(answer(...args));
             wire.keep = [1];
-            wire.changed = [{ s: [2], t: 'PRIVATE-TEXT'.repeat(80) }];
+            wire.changed = [{ s: [2], t: 'PRIVATE-TEXT'.repeat(101) }];
             wire.groups = [{ s: [2], label: 'Subject' }];
             return JSON.stringify(wire);
         });
-        await expect(requestDeepConsolidation(options())).rejects.toThrow('sources: 2) has 960 characters; the limit is 800 (160 over)');
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('sources: 2) has 1212 characters; the limit is 1200 (12 over)');
         expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
         const events = getEvents({ module: 'knowledge' });
         expect(events[0].detail).toMatchObject({ stage: 'validation',

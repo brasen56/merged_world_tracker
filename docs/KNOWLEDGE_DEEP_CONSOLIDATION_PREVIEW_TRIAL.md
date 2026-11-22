@@ -59,9 +59,12 @@ trial's outputs.
       removals" (ledger_cleanup.js header) becomes, on the experimental path
       only, "model JSON can propose archiving; archive is a recoverable
       disposition, never a deletion."
-- [x] Consolidated records obey the existing single-line, ≤800-character
-      bound (`LEDGER_ITEM_LIMITS.fact`, field_contract.js:107); a subject group
-      that needs more becomes multiple records.
+- [x] Changed consolidated records obey a dedicated single-line, ≤1,200-character
+      hard bound (`DEEP_CONSOLIDATION_MAX_CHARS`, knowledge/deep_consolidation.js),
+      with a 500–650-character prompt target (not a minimum). A subject group
+      that needs more becomes multiple records; exact legacy lines may still
+      be kept unchanged. Normal knowledge facts and standard Condense retain
+      the 800-character `LEDGER_ITEM_LIMITS.fact` bound.
 
 #### A–B implementation contract (2026-11-05)
 

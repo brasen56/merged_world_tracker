@@ -6,9 +6,11 @@
  * The shipped cleanup wire and validator are not extended by this module.
  */
 import { captureLedgerReview, originalLedgerProposal } from './ledger_cleanup.js';
-import { LEDGER_ITEM_LIMITS, structuralRejection } from './field_contract.js';
+import { structuralRejection } from './field_contract.js';
 
 export const DEEP_CONSOLIDATION_WIRE_VERSION = 3;
+/** Changed deep-consolidation lines only; normal ledger fact limits are unchanged. */
+export const DEEP_CONSOLIDATION_MAX_CHARS = 1200;
 const fail = reason => ({ ok: false, reason });
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, required, optional = []) => object(value) &&
@@ -189,9 +191,9 @@ export function validateDeepConsolidationProposal(selection, proposal) {
         recordIds.add(record.id);
         const source = sources.get(record.sourceIds[0]);
         const exact = record.sourceIds.length === 1 && source && source.text.replace(/^\s*- /, '') === record.text;
-        if (!exact && record.text.length > LEDGER_ITEM_LIMITS.fact) {
+        if (!exact && record.text.length > DEEP_CONSOLIDATION_MAX_CHARS) {
             const sourceNumbers = record.sourceIds.map(id => sources.has(id) ? sources.get(id).order + 1 : 'unknown');
-            return fail(`Consolidated record ${i + 1} (1-based position in proposal.records; sources: ${sourceNumbers.join(', ')}) has ${record.text.length} characters; the limit is ${LEDGER_ITEM_LIMITS.fact} (${record.text.length - LEDGER_ITEM_LIMITS.fact} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`);
+            return fail(`Consolidated record ${i + 1} (1-based position in proposal.records; sources: ${sourceNumbers.join(', ')}) has ${record.text.length} characters; the limit is ${DEEP_CONSOLIDATION_MAX_CHARS} (${record.text.length - DEEP_CONSOLIDATION_MAX_CHARS} over). Use multiple records within the group with disjoint source ownership, or keep a source unchanged if it cannot safely fit.`);
         }
         for (const id of record.sourceIds) {
             if (!sources.has(id) || owners.has(id)) return fail('Unknown or duplicate source ownership.');
