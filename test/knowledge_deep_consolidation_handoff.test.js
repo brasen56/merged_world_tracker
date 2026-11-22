@@ -57,7 +57,7 @@ it('allows zero accepted batches and does not mutate the deep draft', () => {
 });
 
 it('captures fresh, stashes before saving, and retains deep progress', async () => {
-    const previous = { review: draft.selection.review, proposal: { marker: 'edited' }, decisions: { removals: [] } };
+    const previous = { review: captureDeepConsolidationReview(original).review, proposal: { marker: 'edited' }, decisions: { removals: [] } };
     saveCleanupDraft(capture, previous);
     const first = await handoffDeepConsolidationDraft(draft);
     expect(captureCleanupTarget).toHaveBeenCalledWith({ name: 'Mara', uid: 7 });
@@ -69,7 +69,7 @@ it('captures fresh, stashes before saving, and retains deep progress', async () 
 });
 
 it.each(['originalContent', 'entityId', 'scopeKey', 'bookName', 'name', 'uid'])('refuses changed %s without replacing the Condense draft', async field => {
-    saveCleanupDraft(capture, { review: draft.selection.review, proposal: {}, decisions: { removals: [] } });
+    saveCleanupDraft(capture, { review: captureDeepConsolidationReview(original).review, proposal: {}, decisions: { removals: [] } });
     const previous = getCleanupDraft(capture);
     captureCleanupTarget.mockResolvedValue({ ...capture, [field]: 'changed' });
     await expect(handoffDeepConsolidationDraft(draft)).rejects.toThrow('changed');

@@ -113,3 +113,10 @@ it('refuses concurrent runs, changed entries, pre-aborted signals and late scope
     await expect(runDeepConsolidationBatches(draft)).rejects.toMatchObject({ name: 'AbortError' });
     expect(draft.batches.map(b => b.status)).toEqual(['pending', 'pending']);
 });
+
+it('resumes pending work against appended scans without sending new lines or dossier changes', async () => {
+    captureCleanupTarget.mockResolvedValue({ ...capture, originalContent: capture.originalContent.replace('PRIVATE DOSSIER', 'UPDATED DOSSIER') + '\n- APPENDED SECRET' });
+    await runDeepConsolidationBatches(draft);
+    expect(draft.batches.every(batch => batch.status === 'accepted')).toBe(true);
+    expect(ktFetchFromApi.mock.calls.map(call => call[1]).join('')).not.toMatch(/APPENDED SECRET|UPDATED DOSSIER/);
+});

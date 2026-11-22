@@ -156,7 +156,7 @@ test('experimental NPC action opens a separate read-only preview without generat
     await vi.waitFor(() => expect(document.getElementById('kt-deep-consolidation-modal')).toBeTruthy());
     const modal = document.getElementById('kt-deep-consolidation-modal');
     expect(button.disabled).toBe(false);
-    expect(modal.textContent).toContain('Experimental batches (v2 Phase 3)');
+    expect(modal.textContent).toContain('Experimental batches (v2 Phase 4)');
     expect(apiRequests).toHaveLength(0);
     expect(wiFake.saveCalls).toBe(saves);
     expect(entry7().content).toBe(ORIGINAL);

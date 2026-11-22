@@ -11,6 +11,9 @@ import { createDeepConsolidationDraft, getDeepConsolidationDraft, clearDeepConso
 import { runDeepConsolidationBatches, estimateDeepBatchRequest } from './deep_consolidation_batch_request.js';
 import { handoffDeepConsolidationDraft } from './deep_consolidation_handoff.js';
 import { openLedgerCleanupReviewModal } from './cleanup_review_ui.js';
+import { pickTextFile } from '../core/file.js';
+import { captureCleanupTarget } from './cleanup_commit.js';
+import { exportDeepConsolidationDraft, importDeepConsolidationDraft } from './deep_consolidation_draft_io.js';
 
 const ID = 'kt-deep-consolidation-modal';
 const esc = value => escapeHtml(String(value ?? ''));
@@ -41,15 +44,9 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
     });
     const body = modal.querySelector('.kt-deep-content');
     const current = () => !closed && modal.isConnected && scopeStillCurrent(scope).ok;
-    const intro = '<p><strong>Experimental batches (v2 Phase 3).</strong> Batch results stay in memory when this modal closes, but are lost on page reload. Hand off any completed work to the Condense review to edit, keep originals, or explicitly apply with recovery. Nothing is written to the Knowledge entry before Apply.</p>';
-    if (!prepared.selection) {
-        body.innerHTML = `${intro}<p>${esc(prepared.eligibility.reason || 'No ledger lines to group.')}</p>`;
-        setModalOpener(modal, opener);
-        showModal(ID);
-        return modal;
-    }
-    const sources = prepared.selection.review.sources;
-    body.innerHTML = `${intro}
+    const intro = '<p><strong>Experimental batches (v2 Phase 4).</strong> Batch results stay in memory when this modal closes and survive appended scans. Export a private JSON backup before page reload; there is no autosave. Imported results are revalidated locally. Hand off completed work to Condense to edit or explicitly apply with recovery. Nothing is written to the Knowledge entry before Apply.</p>';
+    const sources = prepared.selection?.review.sources || [];
+    body.innerHTML = `${intro}<p>Draft files contain private source text, accepted records, and retained failed responses. Store them securely. Discard the current draft before importing another.</p>${button('import-draft', 'Import draft JSON')}
         <fieldset class="kt-deep-config"><legend>1. Choose sources</legend>
             <label>Inclusive boundary (ledger source number)<input class="mwt-input" data-deep-boundary type="number" min="1" max="${sources.length}" value="${sources.length}"></label>
             <p>Only sources at or above the boundary, minus pins, are sent. Pins and later lines stay exact.</p>
@@ -78,6 +75,10 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         requestOK = false;
         selected = null;
         try {
+            if (draft) {
+                boundary.value = draft.throughSource;
+                body.querySelectorAll('[data-deep-pin]').forEach(input => { input.checked = draft.pins.includes(Number(input.dataset.deepPin)); });
+            }
             const throughSource = Number(boundary.value);
             body.querySelectorAll('[data-deep-pin]').forEach(input => {
                 input.disabled = Number(input.dataset.deepPin) > throughSource;
@@ -107,10 +108,12 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         const disabled = busy || draft.running || !matches || !consent.checked;
         batchView.innerHTML = `<h4>3. Batch progress</h4>
             <p>${draft.batches.filter(b => b.status === 'accepted').length} accepted / ${draft.batches.length} planned. Calls run sequentially; failures are never retried automatically. Closing cancels the current call and retains completed work.</p>
-            ${!matches ? '<p>This entry changed. The draft cannot resume; append-safe resume and export/import arrive in Phase 4.</p>' : ''}
+            <p>Protected snapshot: s1–s${draft.throughSource}; ${draft.pins.length} pins. Later sources stay exact.</p>
+            ${!matches ? '<p>This entry changed within the protected snapshot or destination. The draft cannot resume and is export-only.</p>' : ''}
             ${button('run-batches', 'Run / resume pending batches', disabled || !draft.batches.some(b => b.status === 'pending') ? 'disabled' : '')}
             ${button('retry-failed', 'Retry all failed batches', disabled || !draft.batches.some(b => b.status === 'failed') ? 'disabled' : '')}
             ${button('discard-draft', 'Discard in-memory batch draft', busy || draft.running ? 'disabled' : '')}
+            ${button('export-draft', 'Export draft JSON')}
             <h4>4. Hand off to Condense</h4><p>Accepted batches become review records. Every other source stays exact, including pending and failed batches. No additional model call is made; any previous Condense draft stays exportable.</p>
             ${button('handoff', 'Review in Condense', busy || draft.running || !matches ? 'disabled' : '')}
             ${draft.batches.map(batch => {
@@ -172,7 +175,27 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
         if (action === 'cancel') { controller?.abort(); return; }
         if (busy) return;
         try {
-            if (action === 'handoff' && draft) {
+            if (action === 'export-draft' && draft) {
+                downloadJson('mwt-deep-consolidation-draft.json', exportDeepConsolidationDraft(draft));
+            } else if (action === 'import-draft') {
+                if (draft) throw new Error('Discard or export the existing deep draft before importing another.');
+                busy = true;
+                updateDisclosure();
+                try {
+                    const text = await pickTextFile('.json');
+                    if (!text || !current()) return;
+                    const capture = await captureCleanupTarget({ name, uid });
+                    if (!current() || !scopeStillCurrent(capture.scopeToken).ok) return;
+                    const imported = importDeepConsolidationDraft(text, capture);
+                    prepared.capture = capture;
+                    draft = imported.draft;
+                    consent.checked = false;
+                    setStatus(modal, imported.matches ? 'Draft imported and revalidated. Consent again before any model call.' : 'Draft imported as stale: export-only; no model call or Apply is allowed.');
+                } finally {
+                    busy = false;
+                    if (current()) updateDisclosure();
+                }
+            } else if (action === 'handoff' && draft) {
                 if (document.getElementById('kt-ledger-review-modal')) throw new Error('Close the existing Condense review before handing off.');
                 controller = new AbortController();
                 busy = true;

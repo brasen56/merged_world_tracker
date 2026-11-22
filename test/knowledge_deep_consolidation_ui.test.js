@@ -8,10 +8,12 @@ import { ktFetchFromApi } from '../knowledge/lorebook.js';
 import { cleanupModelDisclosure, _resetCleanupDraftsForTests, getCleanupDraft } from '../knowledge/cleanup_review.js';
 import { openDeepConsolidationPreviewModal } from '../knowledge/deep_consolidation_review_ui.js';
 import { _resetDeepConsolidationDraftsForTests } from '../knowledge/deep_consolidation_batches.js';
+import { pickTextFile } from '../core/file.js';
 
 vi.mock('../knowledge/cleanup_commit.js', () => ({ captureCleanupTarget: vi.fn() }));
 vi.mock('../knowledge/lorebook.js', () => ({ ktFetchFromApi: vi.fn() }));
 vi.mock('../knowledge/settings.js', () => ({ hasValidSettings: () => true }));
+vi.mock('../core/file.js', () => ({ pickTextFile: vi.fn() }));
 vi.mock('../knowledge/cleanup_review.js', async original => ({ ...await original(), cleanupModelDisclosure: vi.fn() }));
 const original = 'PRIVATE DOSSIER\r\nKnowledge Ledger:\r\n- PRIVATE PIN\r\n- gate\r\n- correction\r\n- alone\r\n- PRIVATE RECENT';
 const find = selector => document.querySelector(selector);
@@ -214,13 +216,14 @@ it('close aborts a batch, ignores its late result and reopens at pending work', 
     await vi.waitFor(() => expect(modal.textContent).toContain('1 accepted / 2 planned'));
 });
 
-it('blocks changed-revision draft resume rather than sending replacement sources', async () => {
+it('allows appended scans on reopen, but still requires fresh consent', async () => {
     const modal = await open(); await generate(); action('plan-batches').click(); modal._closeModal();
     captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original + '\r\n- appended', scopeToken: captureScope() }));
     const reopened = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
-    expect(reopened.textContent).toContain('draft cannot resume');
-    find('[data-deep-consent]').click();
+    expect(reopened.textContent).not.toContain('draft cannot resume');
     expect(action('run-batches').disabled).toBe(true);
+    find('[data-deep-consent]').click();
+    expect(action('run-batches').disabled).toBe(false);
     expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
 });
 
@@ -238,9 +241,51 @@ it('hands off without consent or another model call and opens the Condense edito
 
 it('refuses a hand-off if the live entry changed after the modal opened', async () => {
     await open(); await generate(); action('plan-batches').click();
-    captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original + '\r\n- scan', scopeToken: captureScope() });
+    captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original.replace('- gate', '- edited gate'), scopeToken: captureScope() });
     action('handoff').click();
     await vi.waitFor(() => expect(find('.mwt-status').textContent).toContain('changed'));
     expect(find('#kt-ledger-review-modal')).toBeNull();
     expect(getCleanupDraft({ bookName: 'Test', name: 'Mara', uid: 7 })).toBeNull();
+});
+
+it('exports and imports a draft after reload with fresh consent and the saved boundary/pins', async () => {
+    let modal = await open(); await generate(); action('plan-batches').click();
+    action('export-draft').click();
+    const packet = getFakeDownloadJsonCalls()[0].data;
+    expect(packet.type).toBe('mwt-deep-consolidation-draft');
+    modal._closeModal(); _resetDeepConsolidationDraftsForTests();
+    captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: original + '\r\n- scan', scopeToken: captureScope() }));
+    modal = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    pickTextFile.mockResolvedValue(JSON.stringify(packet));
+    action('import-draft').click();
+    await vi.waitFor(() => expect(modal.textContent).toContain('Draft imported and revalidated'));
+    expect(find('[data-deep-boundary]').value).toBe('4');
+    expect(find('[data-deep-pin="1"]').checked).toBe(true);
+    expect(find('[data-deep-consent]').checked).toBe(false);
+    expect(action('run-batches').disabled).toBe(true);
+    expect(action('handoff').disabled).toBe(false);
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a stale draft exportable even when the ledger is removed and blocks paid calls/handoff', async () => {
+    const modal = await open(); await generate(); action('plan-batches').click(); modal._closeModal();
+    captureCleanupTarget.mockImplementation(async () => ({ name: 'Mara', uid: 7, bookName: 'Test', originalContent: 'no ledger', scopeToken: captureScope() }));
+    const reopened = await openDeepConsolidationPreviewModal('Mara <script>bad</script>', 7);
+    expect(reopened.textContent).toContain('export-only');
+    expect(action('handoff').disabled).toBe(true);
+    find('[data-deep-consent]').click();
+    expect(action('run-batches').disabled).toBe(true);
+    action('export-draft').click();
+    expect(getFakeDownloadJsonCalls()[0].data.snapshot).toHaveLength(4);
+    expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+});
+
+it('does not import a late file after the modal closes', async () => {
+    const modal = await open();
+    let resolve;
+    pickTextFile.mockImplementation(() => new Promise(done => { resolve = done; }));
+    action('import-draft').click();
+    modal._closeModal(); resolve('{"type":"wrong"}');
+    await new Promise(done => setTimeout(done, 0));
+    expect(captureCleanupTarget).toHaveBeenCalledTimes(1);
 });

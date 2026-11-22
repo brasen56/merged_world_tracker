@@ -1,7 +1,7 @@
 /** Manual sequential runner. No entry writes, automatic retries or persistence. */
 import { estimateTokens } from '../core/context.js';
 import { record, getApiCalls } from '../core/diagnostics.js';
-import { scopeStillCurrent } from '../core/scope.js';
+import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { captureCleanupTarget } from './cleanup_commit.js';
 import { newReviewId, buildLedgerCleanupUserContent, minimumProposalEnvelope, cleanupModelDisclosure,
     checkCleanupBudget, expandKeepListProposal } from './cleanup_review.js';
@@ -94,10 +94,11 @@ export async function runDeepConsolidationBatches(draft, { signal, mode = 'pendi
     draft.running = true;
     let active;
     let previousStatus;
+    const scope = captureScope();
     try {
-        // Refresh scope tokens on reopen, while requiring the same revision and
-        // destination. Append-safe freshness belongs to Phase 4, not this runner.
+        // Refresh scope tokens, preserving the protected ledger prefix.
         const capture = await captureCleanupTarget({ name: draft.capture.name, uid: draft.capture.uid });
+        assertCurrent({ scopeToken: scope }, signal);
         assertCurrent(capture, signal);
         if (!deepDraftMatches(draft, capture)) throw new Error('The Knowledge entry or destination changed. This draft cannot resume against changed content.');
         const queue = draft.batches.filter(batch => batch.status === mode && (!batchId || batch.id === batchId));

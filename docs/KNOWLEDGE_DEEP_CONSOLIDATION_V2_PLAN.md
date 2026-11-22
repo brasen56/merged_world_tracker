@@ -1,6 +1,6 @@
 # Knowledge Tracker — deep consolidation v2 (batched, no archive)
 
-**Status:** In progress; Phases 0–3 done 2026-11-22. Batch execution has in-memory progress and a validated hand-off to the existing Condense review. Append-safe resume and export/import remain Phase 4.
+**Status:** In progress; Phases 0–4 done 2026-11-22. Batch execution has in-memory progress, append-safe resume, validated manual export/import, and a hand-off to the existing Condense review. Durable autosave and the live trial remain Phases 5–6.
 **Date:** 2026-11-22
 **Replaces:** [KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md](./KNOWLEDGE_DEEP_CONSOLIDATION_PREVIEW_TRIAL.md) (the v1 build checklist; its §5 verdict was never reached).
 **Background:** [KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md](./KNOWLEDGE_DEEP_CONSOLIDATION_SCOPE.md) — the original problem statement and the appended response.
@@ -228,19 +228,49 @@ No live paid model call or SillyTavern-host trial was performed.
 
 ### Phase 4 — resume across scans, export/import
 
-- [ ] The draft stores source **numbers plus a text snapshot** of the
+- [x] The draft stores source **numbers plus a text snapshot** of the
       eligible span, never review-scoped source ids (those change on every
       capture).
-- [ ] Resume rule: a fresh capture's first `throughSource` ledger lines must
+- [x] Resume rule: a fresh capture's first `throughSource` ledger lines must
       equal the snapshot exactly. Scans only append after the last item
       (knowledge/lorebook.js:977), so a draft survives scans. Any other
       difference (Edit-in-View, a Condense apply, a removal) makes the draft
       stale and export-only.
-- [ ] Export / import the draft as a versioned JSON file
+- [x] Export / import the draft as a versioned JSON file
       (`type: 'mwt-deep-consolidation-draft'`). Import never trusts a review
       object from the file: it reads the snapshot, groups and batch results,
       then applies the resume rule against a fresh capture and re-validates
       every batch.
+
+Phase 4 implementation (2026-11-22): the retained draft contains destination
+identity, numeric pins/groups/batch mappings, and exact source text through the
+boundary, not a captured review or its source IDs. Resume checks compare the
+protected prefix, including whitespace, while allowing dossier updates and later
+ledger sources. Line-ending changes alone do not change source text. Runner and
+hand-off capture the live destination afresh; hand-off preserves later sources
+and the fresh dossier through the existing full Condense review.
+
+`knowledge/deep_consolidation_draft_io.js` provides version-1
+`mwt-deep-consolidation-draft` JSON. Import requires the same destination identity,
+checks pins, groups, batch membership/coverage, statuses and caps, and rebuilds
+local mini-ledger reviews to revalidate accepted records with the bounded 1,200
+limit. File-supplied reviews, IDs, limits and source tables are never trusted.
+Pending/failed/skipped progress, attempt counts and private failure downloads are
+retained; in-flight exports become pending (or failed when retrying). Invalid
+imports never replace retained work; an existing draft must be discarded first.
+Structurally valid stale drafts remain export-only with no partial salvage.
+
+The modal offers manual import/export with a private-content warning, fresh
+consent after import/reopen, saved boundary/pin disclosure, and disabled run/retry/
+hand-off for stale drafts, even when the ledger has been removed. No autosave,
+model call on import, or live-entry write was added. Tests cover append-safe
+resume and fresh hand-off, round trips, stale prefixes, altered whitespace,
+identity/corrupt-result rejection, forged reviews/limits, explicit failure retry
+state, existing-draft retention, and late picker completion after close. No live
+paid model call or SillyTavern-host trial was performed.
+
+Phase 4 validation (2026-11-22): `npm test` — 222 files, 5,663 tests
+passed; `npm run lint` and `git diff --check` passed.
 
 ### Phase 5 — durable autosave (only if reloads mid-run turn out to matter)
 

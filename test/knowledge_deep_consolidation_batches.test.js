@@ -47,7 +47,7 @@ it('copies exact text into a mini-ledger and maps local ids back to ledger numbe
     expect(JSON.stringify(mapped)).not.toContain('batch-test:source');
 });
 
-it('retains scoped drafts by exact revision and excludes pins, recent and ungrouped sources', () => {
+it('retains scoped drafts across appended scans and excludes pins, recent and ungrouped sources', () => {
     const selection = captureDeepConsolidationReview(content(['pin', 'a', 'b', 'ungrouped', 'recent']), { throughSource: 4, pins: [1] });
     const capture = { scopeKey: 'chat', bookName: 'book', name: 'Mara', uid: 1, originalContent: selection.review.original };
     const draft = createDeepConsolidationDraft(capture, { selection, groups: [{ label: 'Gate', s: [1, 2, 3, 5] }] });
@@ -56,7 +56,8 @@ it('retains scoped drafts by exact revision and excludes pins, recent and ungrou
     expect(getDeepConsolidationDraft({ ...capture })).toBe(draft);
     expect(getDeepConsolidationDraft({ ...capture, scopeKey: 'other' })).toBeNull();
     expect(deepDraftMatches(draft, { ...capture })).toBe(true);
-    expect(deepDraftMatches(draft, { ...capture, originalContent: capture.originalContent + '\n- scan' })).toBe(false);
+    expect(deepDraftMatches(draft, { ...capture, originalContent: capture.originalContent + '\n- scan' })).toBe(true);
+    expect(JSON.stringify(draft)).not.toContain(':source:');
 });
 
 it('opts into the bounded 1200 limit throughout helpers while keeping Condense defaults unchanged', () => {

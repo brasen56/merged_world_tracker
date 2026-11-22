@@ -1,7 +1,7 @@
 /** Pure, deterministic batch planning. Numbers always refer to the full ledger. */
 import { estimateTokens } from '../core/context.js';
 import { BATCH_MAX_SOURCES, BATCH_MAX_TOKENS, normalizeDeepGroups } from './deep_consolidation_groups.js';
-import { captureLedgerReview } from './ledger_cleanup.js';
+import { captureLedgerReview, parseLedger } from './ledger_cleanup.js';
 import { DEEP_CONSOLIDATION_MAX_CHARS } from './deep_consolidation_limits.js';
 
 /** sources is the captured ledger source table. Oversized indivisible lines
@@ -62,18 +62,33 @@ const drafts = new Map();
 const key = capture => [capture.scopeKey, capture.bookName, capture.name, String(capture.uid)].join('|');
 export const getDeepConsolidationDraft = capture => drafts.get(key(capture)) || null;
 export const clearDeepConsolidationDraft = capture => drafts.delete(key(capture));
+export function retainDeepConsolidationDraft(draft) {
+    const previous = getDeepConsolidationDraft(draft.capture);
+    if (previous && previous !== draft) throw new Error('Discard or export the existing deep draft before importing another.');
+    drafts.set(key(draft.capture), draft);
+    return draft;
+}
 export const _resetDeepConsolidationDraftsForTests = () => drafts.clear();
 
 export function createDeepConsolidationDraft(capture, session) {
     const normalized = normalizeDeepGroups(session.selection, { reviewId: session.selection.review.reviewId, groups: session.groups });
     if (!normalized.ok) throw new Error(normalized.reason);
-    const draft = { capture, selection: session.selection, ...normalized, running: false,
+    const { selection } = session;
+    const draft = { capture: Object.fromEntries(['scopeKey', 'bookName', 'name', 'uid', 'entityId'].map(field => [field, capture[field]])),
+        throughSource: selection.throughSource,
+        snapshot: selection.eligibleSources.map(source => source.text),
+        pins: selection.pinnedSourceIds.map(id => selection.review.sources.find(source => source.id === id).order + 1),
+        ...normalized, running: false,
         batches: planBatches(normalized.groups, { sources: session.selection.review.sources }) };
     drafts.set(key(capture), draft);
     return draft;
 }
 
-/** Phase 2 is deliberately exact-revision-only. Append-safe resume is Phase 4. */
+/** Only the protected ledger prefix is revision-bound. Dossier updates and
+ * later ledger lines do not participate; exact source whitespace does. */
 export function deepDraftMatches(draft, capture) {
-    return ['scopeKey', 'bookName', 'name', 'uid', 'entityId', 'originalContent'].every(field => draft.capture[field] === capture[field]);
+    if (!['scopeKey', 'bookName', 'name', 'uid', 'entityId'].every(field => draft.capture[field] === capture[field])) return false;
+    const parsed = parseLedger(capture.originalContent);
+    return parsed.ok && Array.isArray(draft.snapshot) && draft.snapshot.length === draft.throughSource &&
+        parsed.items.length >= draft.throughSource && draft.snapshot.every((text, i) => text === parsed.items[i].text);
 }
