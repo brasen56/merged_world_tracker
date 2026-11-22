@@ -6,7 +6,7 @@ import { scopeStillCurrent } from '../core/scope.js';
 import { hasValidSettings } from '../knowledge/settings.js';
 import { requestDeepConsolidation, estimateDeepConsolidationRequest } from '../knowledge/deep_consolidation_request.js';
 import { captureDeepConsolidationReview } from '../knowledge/deep_consolidation.js';
-import { DEEP_CONSOLIDATION_PROMPT } from '../knowledge/deep_consolidation_prompt.js';
+import { DEEP_CONSOLIDATION_PROMPT, DEEP_CONSOLIDATION_GRAMMAR } from '../knowledge/deep_consolidation_prompt.js';
 
 vi.mock('../knowledge/cleanup_commit.js', () => ({ captureCleanupTarget: vi.fn() }));
 vi.mock('../knowledge/lorebook.js', () => ({ ktFetchFromApi: vi.fn() }));
@@ -44,18 +44,17 @@ describe('deep consolidation request', () => {
         expect(transport).toMatchObject({ trigger: 'manual', retries: 0 });
         expect(result.requestFacts.estimate.disclosure.modelName).toBe('test');
         expect(result.requestFacts.budget.warnings.join(' ')).toContain('unknown');
-        expect(result.requestFacts.grammar.name).toBe('inline-clause-provenance');
+        expect(result.requestFacts.grammar.name).toBe('shared-clause-provenance');
         expect(result.entryText).toBe(original);
     });
 
-    it('captures fresh review ids on regeneration and bounded retry', async () => {
-        ktFetchFromApi.mockResolvedValueOnce('{"version":');
+    it('captures fresh review ids on manual regeneration', async () => {
         const first = await requestDeepConsolidation(options());
         const second = await requestDeepConsolidation(options());
         const ids = ktFetchFromApi.mock.calls.map(([, payload]) => /<review_id>(.*?)<\/review_id>/.exec(payload)[1]);
-        expect(new Set(ids).size).toBe(3);
-        expect(captureCleanupTarget).toHaveBeenCalledTimes(3);
-        expect(first.requestFacts.attempt).toBe(2);
+        expect(new Set(ids).size).toBe(2);
+        expect(captureCleanupTarget).toHaveBeenCalledTimes(2);
+        expect(first.requestFacts.attempt).toBe(1);
         expect(first.selection.review.reviewId).not.toBe(second.selection.review.reviewId);
     });
 
@@ -72,8 +71,9 @@ describe('deep consolidation request', () => {
             captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, originalContent: original + '\n- new fact', scopeToken: {} });
             return '{"version":';
         });
-        await expect(requestDeepConsolidation(options())).rejects.toThrow('Close and reopen');
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('No automatic retry');
         expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+        expect(captureCleanupTarget).toHaveBeenCalledTimes(1);
     });
 
     it('does not plan to rewrite pinned sources', () => {
@@ -88,12 +88,46 @@ describe('deep consolidation request', () => {
         expect(ktFetchFromApi).not.toHaveBeenCalled();
     });
 
-    it('discards stale ids and truncated output after two attempts', async () => {
+    it('discards stale ids and truncated output after one attempt each', async () => {
         for (const raw of ['{"version":3', JSON.stringify({ version: 3, reviewId: 'stale', keep: [1, 2], changed: [], archive: [], groups: [] })]) {
             ktFetchFromApi.mockResolvedValue(raw);
             await expect(requestDeepConsolidation(options())).rejects.toThrow('No preview');
         }
-        expect(ktFetchFromApi).toHaveBeenCalledTimes(4);
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(2);
+    });
+
+    it('explains malformed JSON and response allowance without repair or retry', async () => {
+        ktFetchFromApi.mockResolvedValue('{"version":3,"changed":[');
+        await expect(requestDeepConsolidation(options())).rejects.toThrow(/malformed or truncated.*8000 tokens.*boundary.*No automatic retry/);
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry transport errors', async () => {
+        ktFetchFromApi.mockRejectedValueOnce(new Error('Endpoint unavailable'));
+        await expect(requestDeepConsolidation(options())).rejects.toThrow('Endpoint unavailable');
+        expect(ktFetchFromApi).toHaveBeenCalledTimes(1);
+    });
+
+    it('instructs shared tags only for identical provenance and dates, and safe JSON strings', () => {
+        expect(DEEP_CONSOLIDATION_GRAMMAR.version).toBe(2);
+        expect(DEEP_CONSOLIDATION_PROMPT).toContain('share ONE trailing tag');
+        expect(DEEP_CONSOLIDATION_PROMPT).toContain('If provenance OR date differs');
+        expect(DEEP_CONSOLIDATION_PROMPT).toContain('escape double quotes and backslashes');
+        expect(DEEP_CONSOLIDATION_PROMPT).toContain('omit optional notes');
+    });
+
+    it('accepts complex quoted content with one shared tag and preserves source mappings', async () => {
+        const tag = '(via witness — August 21, 2000)';
+        captureCleanupTarget.mockResolvedValue({ name: 'Mara', uid: 7, scopeToken: {},
+            originalContent: `Knowledge Ledger:\n- Saw the gate open ${tag}\n- Heard Ezra say "enter" ${tag}\n- Saw the gate close ${tag}` });
+        const text = `Saw the gate open; heard Ezra say "enter"; saw the gate close ${tag}`;
+        ktFetchFromApi.mockImplementation((_prompt, payload) => JSON.stringify({ version: 3,
+            reviewId: /<review_id>(.*?)<\/review_id>/.exec(payload)[1], keep: [],
+            changed: [{ s: [1, 2, 3], t: text }], archive: [], groups: [{ s: [1, 2, 3], label: 'Gate' }] }));
+        const result = await requestDeepConsolidation({ name: 'Mara', uid: 7 });
+        expect(result.entryText).toBe(`Knowledge Ledger:\n- ${text}`);
+        expect(result.entryText.split(tag)).toHaveLength(2);
+        expect(result.proposal.records[0].sourceIds).toHaveLength(3);
     });
 
     it('cancels before dispatch and after response without retry', async () => {

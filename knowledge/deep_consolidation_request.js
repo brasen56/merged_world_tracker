@@ -1,5 +1,4 @@
 /** Experimental §3C request seam. No drafts, staging, recovery or writes. */
-import { isCancellation } from '../core/index.js';
 import { estimateTokens } from '../core/context.js';
 import { scopeStillCurrent } from '../core/scope.js';
 import { cleanupModelDisclosure, checkCleanupBudget } from './cleanup_review.js';
@@ -51,51 +50,41 @@ function assertCurrent(capture, signal) {
     }
 }
 
-/** Explicit manual invocation only. Capture again on EVERY generation. A
- * bounded retry is also a new request with a new identity-bound capture/id;
- * cancellation and scope changes are never retried. Nothing is persisted.
+/** Explicit manual invocation only. Capture again on EVERY generation.
+ * One paid attempt, with no transport or proposal retry. Nothing is persisted.
  */
 export async function requestDeepConsolidation({ name, uid, throughSource, pins = [], activeBudget = 4000, signal, expectedCapture } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
-    let origin;
-    let lastError;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-        if (origin) assertCurrent(origin, signal);
-        const prepared = await prepareDeepConsolidation({ name, uid, throughSource, pins });
-        const { capture, eligibility, selection } = prepared;
-        if (origin) assertCurrent(origin, signal);
-        origin ??= capture;
-        assertCurrent(capture, signal);
-        // Source numbers and consent refer to a specific snapshot/destination.
-        // Never silently send replacement content after a scan or book switch.
-        const expected = expectedCapture ?? origin;
-        if (expectedCapture) assertCurrent(expectedCapture, signal);
-        if (['name', 'uid', 'bookName', 'entityId', 'originalContent'].some(key => capture[key] !== expected[key])) {
+    if (expectedCapture) assertCurrent(expectedCapture, signal);
+    const prepared = await prepareDeepConsolidation({ name, uid, throughSource, pins });
+    const { capture, eligibility, selection } = prepared;
+    assertCurrent(capture, signal);
+    // Source numbers and consent refer to a specific snapshot/destination.
+    // Never silently send replacement content after a scan or book switch.
+    if (expectedCapture) {
+        assertCurrent(expectedCapture, signal);
+        if (['name', 'uid', 'bookName', 'entityId', 'originalContent'].some(key => capture[key] !== expectedCapture[key])) {
             throw new Error('The Knowledge entry or destination changed. Close and reopen the preview to review the current sources before sending.');
         }
-        if (!selection) throw new Error(eligibility.reason || 'No eligible ledger to consolidate.');
-        const request = estimateDeepConsolidationRequest({ name: capture.name, selection, activeBudget });
-        if (!request.budget.ok) {
-            const error = new Error(`${request.budget.reason} ${request.budget.suggestion}`.trim());
-            error.code = request.budget.code;
-            throw error;
-        }
-        try {
-            const raw = await ktFetchFromApi(DEEP_CONSOLIDATION_PROMPT, request.userContent, { retries: 0, trigger: 'manual', signal });
-            assertCurrent(capture, signal);
-            const parsed = parseLedgerProposal(raw);
-            const expanded = parsed.ok ? expandDeepConsolidationProposal(selection, parsed.proposal) : parsed;
-            if (!expanded.ok) throw new Error(`The experimental proposal was discarded: ${expanded.reason}`);
-            const inspection = inspectDeepConsolidation(selection, expanded.proposal, { activeBudget });
-            return { ...prepared, proposal: expanded.proposal, ...inspection,
-                requestFacts: { prompt: DEEP_CONSOLIDATION_PROMPT, grammar: DEEP_CONSOLIDATION_GRAMMAR,
-                    userContent: request.userContent, estimate: request.estimate, budget: request.budget, attempt,
-                    archivePersistence: 'none; read-only in-memory preview' } };
-        } catch (error) {
-            if (isCancellation(error) || error?._noRetry || signal?.aborted) throw error;
-            assertCurrent(capture, signal);
-            lastError = error;
-        }
     }
-    throw new Error(`No preview: deep consolidation failed after 2 attempts. ${lastError?.message || 'No complete proposal.'}`);
+    if (!selection) throw new Error(eligibility.reason || 'No eligible ledger to consolidate.');
+    const request = estimateDeepConsolidationRequest({ name: capture.name, selection, activeBudget });
+    if (!request.budget.ok) {
+        const error = new Error(`${request.budget.reason} ${request.budget.suggestion}`.trim());
+        error.code = request.budget.code;
+        throw error;
+    }
+    const raw = await ktFetchFromApi(DEEP_CONSOLIDATION_PROMPT, request.userContent, { retries: 0, trigger: 'manual', signal });
+    assertCurrent(capture, signal);
+    const parsed = parseLedgerProposal(raw);
+    if (!parsed.ok) {
+        throw new Error(`No preview: the model did not return a complete strict JSON proposal. ${parsed.reason} The response may be malformed or truncated (configured response allowance: ${request.estimate.outputAllowance} tokens). Increase the Knowledge connection's response token limit or select fewer sources using the boundary, then generate again manually. The active ledger token goal does not increase the response allowance. No automatic retry was made; nothing was changed.`);
+    }
+    const expanded = expandDeepConsolidationProposal(selection, parsed.proposal);
+    if (!expanded.ok) throw new Error(`No preview: the experimental proposal was discarded: ${expanded.reason} No automatic retry was made; nothing was changed.`);
+    const inspection = inspectDeepConsolidation(selection, expanded.proposal, { activeBudget });
+    return { ...prepared, proposal: expanded.proposal, ...inspection,
+        requestFacts: { prompt: DEEP_CONSOLIDATION_PROMPT, grammar: DEEP_CONSOLIDATION_GRAMMAR,
+            userContent: request.userContent, estimate: request.estimate, budget: request.budget, attempt: 1,
+            archivePersistence: 'none; read-only in-memory preview' } };
 }

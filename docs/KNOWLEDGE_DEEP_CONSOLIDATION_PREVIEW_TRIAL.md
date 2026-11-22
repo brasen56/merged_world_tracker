@@ -110,11 +110,11 @@ trial's outputs.
 - [x] New sibling prompt (do not edit `LEDGER_CLEANUP_PROMPT`): subject
       grouping with corrections kept with the lines they correct; belief vs
       fact; no psychological conclusions; per-fact provenance and dates kept
-      inline; budget stated as a goal, never truncation permission; pins
+      inline (identical consecutive provenance/date pairs share a tag); budget stated as a goal, never truncation permission; pins
       honored; archive list justified per line or group.
 - [x] Decide the consolidated-line grammar. Multi-fact lines do not fit
       `- fact via source — date` (lorebook.js:771); propose inline
-      parenthetical provenance/date per clause. This choice affects scan
+      parenthetical provenance/date per clause or consecutive run sharing an identical pair. This choice affects scan
       regrowth recognition (see F) and must be recorded in the trial packet.
 
 ### D. Deterministic checks (mandatory guard — response point 4)
@@ -136,10 +136,12 @@ trial's outputs.
 
 - `knowledge/deep_consolidation_request.js` exposes the manual-only
   `requestDeepConsolidation({name, uid, throughSource, pins, activeBudget,
-  signal})` seam. It captures the target afresh for every generation and each
-  of at most two attempts. Strict parse/experimental expansion precede every
-  returned preview. Cancellation, scope changes and non-retryable transport
-  failures are never retried. No draft, staging, recovery or write API is used.
+  signal})` seam. It captures the target afresh for every manual generation,
+  with one billable attempt and no automatic transport or proposal retries.
+  Strict parse/experimental expansion precede every returned preview. Malformed
+  or truncated JSON is never repaired; failures explain the response allowance
+  and suggest increasing it or selecting fewer sources. No draft, staging,
+  recovery or write API is used.
 - `estimateDeepConsolidationRequest({name, selection, activeBudget})` returns
   user payload, resolved Knowledge disclosure, experimental v3 prompt/wire
   estimates and the shared budget verdict for E's pre-request disclosure.
@@ -149,8 +151,9 @@ trial's outputs.
   the minimal complete envelope; rewrite-all is a planning estimate, not a
   guarantee or upper bound (notes/group labels can grow).
 - `knowledge/deep_consolidation_prompt.js` defines the sibling prompt and
-  grammar v1: `fact (via source — date); fact (via source — date)`.
-  Each clause keeps its own provenance/date; unknowns are never invented.
+  grammar v2: `fact; fact (via shared source — shared date)`.
+  Consecutive clauses with identical provenance AND date share one trailing
+  tag; different pairs retain separate tags. Unknowns are never invented.
   Exact originals retain their grammar. `requestFacts` includes the full prompt,
   payload, grammar object, model/profile disclosure, estimate and budget
   warnings, included in E's trial packet downloads.

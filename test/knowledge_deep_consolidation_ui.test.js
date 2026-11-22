@@ -78,6 +78,7 @@ describe('read-only deep consolidation preview UI', () => {
         const uuid = vi.spyOn(globalThis.crypto, 'randomUUID');
         await open();
         const initial = find('.kt-deep-disclosure').textContent;
+        expect(find('[data-deep-consent]').parentElement.textContent).toContain('one billable attempt per generation; no automatic retry');
         const captures = uuid.mock.calls.length;
         find('[data-deep-consent]').click();
         expect(find('.kt-deep-disclosure').textContent).toBe(initial);
@@ -151,7 +152,7 @@ describe('read-only deep consolidation preview UI', () => {
         expect(packet.originalEntry).toBe(original);
         expect(packet.consolidatedEntry).toContain('- RECENT PRIVATE\r\n\r\nOther: intact');
         expect(packet.requestFacts.estimate.disclosure.modelName).toBe('test-model');
-        expect(packet.requestFacts.grammar.name).toBe('inline-clause-provenance');
+        expect(packet.requestFacts.grammar.name).toBe('shared-clause-provenance');
         expect(getFakeDownloadBlobCalls()).toHaveLength(1);
         expect(packet.measurements.afterTokens).toBeGreaterThan(0);
         expect(packet.warnings.some(warning => warning.sourceNumber === 3)).toBe(true);

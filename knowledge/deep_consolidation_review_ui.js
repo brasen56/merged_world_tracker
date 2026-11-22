@@ -56,7 +56,7 @@ export async function openDeepConsolidationPreviewModal(name, uid) {
             <details><summary>Source table and pins</summary>${sources.map(source => `<label class="kt-deep-source"><input type="checkbox" data-deep-pin="${source.order + 1}"> Pin s${source.order + 1}: <span>${esc(source.text)}</span></label>`).join('')}</details>
         </fieldset>
         <div class="kt-deep-disclosure"></div>
-        <label><input type="checkbox" data-deep-consent> I consent to sending the selected lines and NPC name to the disclosed Knowledge endpoint (up to two billable attempts per generation).</label>
+        <label><input type="checkbox" data-deep-consent> I consent to sending the selected lines and NPC name to the disclosed Knowledge endpoint (one billable attempt per generation; no automatic retry).</label>
         <div class="kt-condense-actions">${button('generate', 'Generate preview')}${button('cancel', 'Cancel request', 'hidden')}</div>
         <div class="kt-deep-review"></div>`;
     const config = body.querySelector('.kt-deep-config');
