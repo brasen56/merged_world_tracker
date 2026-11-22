@@ -365,6 +365,36 @@ function exactKnowledgeStore(incoming) {
     return { data, summary: emptySummary() };
 }
 
+/**
+ * Sections that hold ONE authored record each (a calendar, Ambient's settings
+ * and seed, or a Ledger). Merging fields or financial histories produces a
+ * record neither chat had, so these restore as a
+ * unit: replace, or keep/skip, exactly like World State.
+ */
+// Never merge Ledger histories: shared transactions would be counted twice.
+const WHOLE_RECORD_SECTIONS = Object.freeze(['calendar', 'ambient', 'ledger']);
+
+/**
+ * Default mode for a whole-record section. Known identity: replace (the
+ * backup's record is what its restored data was authored against). Unknown
+ * identity: the merge-only fallback never performs a destructive
+ * whole-document overwrite (see resolveIdentityPolicy), so an EXISTING record
+ * is kept — but filling an absent one destroys nothing, so it still restores.
+ */
+function wholeRecordDefaultMode(identityPolicy, rawCurrent) {
+    if (identityPolicy.identityKnown) return 'replace';
+    return rawCurrent === undefined || rawCurrent === null ? 'replace' : 'keep';
+}
+
+/** replaceSection(), reporting an identical record as no change instead of an update. */
+function replaceWholeRecord(current, incoming, mode, name) {
+    const planned = replaceSection(current, incoming, mode, name);
+    if (mode !== 'keep' && mode !== 'skip' && current !== undefined && backupDataEqual(current, incoming)) {
+        planned.summary.updated = 0;
+    }
+    return planned;
+}
+
 function replaceSection(current, incoming, mode, name) {
     const summary = emptySummary();
     if (mode === 'keep' || mode === 'skip') {
@@ -498,7 +528,8 @@ function sameChatIdentity(backupIdentity, currentIdentity) {
  *    merge restore is permitted (the epoch guard still applies), but perMessage
  *    is always skipped, exact/replace is disabled, and world state defaults to
  *    "keep current" so the merge-only fallback never contains a destructive
- *    whole-document overwrite. A prominent warning is surfaced for the UI.
+ *    whole-document overwrite (an existing calendar/ambient record likewise —
+ *    wholeRecordDefaultMode). A prominent warning is surfaced for the UI.
  */
 function resolveIdentityPolicy(identityUnknown, sameChat) {
     if (!identityUnknown) {
@@ -519,8 +550,9 @@ function resolveIdentityPolicy(identityUnknown, sameChat) {
         worldStateDefault: 'keep',
         perMessageAllowed: false,
         exactAllowed: false,
-        restrictions: ['perMessage skipped', 'exact/replace disabled', 'world state defaults to keep current'],
-        warning: 'This SillyTavern build cannot verify chat identity. Only non-destructive merge restore is available; per-message interiority and exact replacement are disabled, and world state defaults to keep current.',
+        restrictions: ['perMessage skipped', 'exact/replace disabled', 'world state defaults to keep current',
+            'an existing calendar or ambient record defaults to keep current'],
+        warning: 'This SillyTavern build cannot verify chat identity. Only non-destructive merge restore is available; per-message interiority and exact replacement are disabled, and world state (plus an existing calendar or Ambient record) defaults to keep current.',
     };
 }
 
@@ -610,12 +642,15 @@ export function planRestore(envelope, current = {}, {
     for (const [name, data] of Object.entries(imported)) {
         const schema = getStoreSchema(name);
         const rawCurrent = current[name];
-        // Replace-mode sections honor keep/skip (worldState, knowledgeCounters).
+        // Replace-mode sections honor keep/skip (worldState, knowledgeCounters,
+        // and the whole-record calendar/ambient sections).
         const replaceMode = name === 'worldState'
             ? sectionMode(modes, name, identityPolicy.worldStateDefault)
             : name === 'knowledgeCounters'
                 ? sectionMode(modes, name, 'replace')
-                : null;
+                : WHOLE_RECORD_SECTIONS.includes(name)
+                    ? sectionMode(modes, name, wholeRecordDefaultMode(identityPolicy, rawCurrent))
+                    : null;
         const isKeepSkip = replaceMode === 'keep' || replaceMode === 'skip';
 
         // ── Migrate the DESTINATION half before merging (design §4.2/§7.7) ──
@@ -688,6 +723,7 @@ export function planRestore(envelope, current = {}, {
             ? exactKnowledgeStore(data)
             : mergeKnowledgeStore(currentData, data, modes.knowledgeStore || {});
         else if (name === 'worldState') planned = replaceSection(currentData, data, replaceMode, name);
+        else if (WHOLE_RECORD_SECTIONS.includes(name)) planned = replaceWholeRecord(currentData, data, replaceMode, name);
         else planned = { data: cloneBackupData(data), summary: emptySummary() };
 
         // ── Revalidate the COMPLETED section value (design §8) ──────────────

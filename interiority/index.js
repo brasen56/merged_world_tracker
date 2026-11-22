@@ -735,7 +735,10 @@ export async function onMessageDeleted(deletedIndex) {
             if (Array.isArray(deleted.ledgerSnapshot)) snapshotToRestore = deleted.ledgerSnapshot;
             if (deleted.innerStatesSnapshot) innerStatesSnapshotToRestore = deleted.innerStatesSnapshot;
             if (typeof deleted.turnCounterAtSnapshot === 'number') turnCounterToRestore = deleted.turnCounterAtSnapshot;
-            if (Array.isArray(deleted.lifecycleHistorySnapshot)) lifecycleHistoryToRestore = deleted.lifecycleHistorySnapshot;
+            // A rollback point object, or a full-copy array from an older version.
+            if (deleted.lifecycleHistorySnapshot && typeof deleted.lifecycleHistorySnapshot === 'object') {
+                lifecycleHistoryToRestore = deleted.lifecycleHistorySnapshot;
+            }
             if (deleted.evidenceBoundariesSnapshot && typeof deleted.evidenceBoundariesSnapshot === 'object') {
                 evidenceBoundariesToRestore = deleted.evidenceBoundariesSnapshot;
             }
@@ -812,7 +815,7 @@ function invalidateAndMaybeRegenerate(msgIdx, eventName) {
         // history (engine records from the discarded generation are truncated;
         // user records survive) and the evidence boundaries, so a swiped-away
         // generation never counts as consumed evidence.
-        if (Array.isArray(deleted.lifecycleHistorySnapshot)) {
+        if (deleted.lifecycleHistorySnapshot && typeof deleted.lifecycleHistorySnapshot === 'object') {
             restoreLifecycleHistorySnapshot(deleted.lifecycleHistorySnapshot);
             reapplyUserLifecycleTransitions();
         }

@@ -274,6 +274,19 @@ describe('validateScanRecord', () => {
 // ─── Prompt guidance renders from the same definitions ──────────────────────
 
 describe('contractPromptBlock', () => {
+    test('cleanup echoes unchanged values while ordinary updates still use null', () => {
+        const cleanup = contractPromptBlock({ mode: 'dossier', unchanged: 'echo' });
+        expect(cleanup).toContain('echo the exact original stored string');
+        expect(cleanup).toContain('never output null');
+        expect(cleanup).not.toContain('otherwise output null');
+        expect(contractPromptBlock()).toContain('otherwise output null');
+        // Cleanup is told the limits and is never told an echo is invalid.
+        expect(cleanup).not.toContain('overshoots its shape');
+        expect(cleanup).toContain('Role: ');
+        expect(cleanup).toContain('Max 400 characters.');
+        expect(contractPromptBlock()).not.toContain('Max 400 characters.');
+    });
+
     test('dossier mode covers every contract field and the three general rules', () => {
         const block = contractPromptBlock({ mode: 'dossier' });
         for (const def of FIELD_CONTRACT) {

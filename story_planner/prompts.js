@@ -110,9 +110,20 @@ export const ESCALATION_GUIDANCE = Object.freeze({
     escalating: `Escalation preference: escalating. ${WORKS_AGAINST_DESTINATION} Each beat should leave someone with more to lose than the one before. ${COMPLICATION_LIMITS}`,
 });
 
+// ─── Pitch mode (scoped Add) ─────────────────────────────────────────────────
+// Three rounds of rule wording left plans that passed every rule and still read
+// flat. Part of that is the shape of the request: one call asked for every arc
+// and its beats at once, so each arc got the model's first idea and a share of
+// the output budget. A pitch request asks for descriptions alone, more of them
+// than the user means to keep; review is the selection step, and the targeted
+// `setup` operation then writes beats for one kept arc at a time. The variety
+// rule is what makes over-asking worth it: without it the extra slots fill with
+// the next obvious step of each open thread.
+export const PITCH_VARIETY_RULE = 'The user will keep only a few of these, so make them genuinely different from one another: vary what drives each pitch, who it puts under pressure, the kind of encounter it builds toward, and its scale. Two pitches that are one idea under different names waste a slot. Prefer an idea a reader of this story would not have predicted but would recognise as fitting over the next obvious step of an open thread.';
+
 // ─── Section format block (derived — do not hand-write headings) ─────────────
 
-export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
+export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open', { pitchOnly = false } = {}) {
     const selected = Array.isArray(sectionKeys)
         ? SECTIONS.filter(section => sectionKeys.includes(section.key))
         : SECTIONS;
@@ -159,7 +170,11 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
     // two also differ in setting and scale and share no posted-notice beats,
     // which an earlier pair had in common. The Harbor Lease keeps its clock, so
     // The Spare Room's last beat is a public commitment instead: both used to
-    // end "a week sooner, before anyone can respond".
+    // end "a week sooner, before anyone can respond". The Harbor Lease's last
+    // beat happens in person, with the dockmaster at the warehouse, rather
+    // than as an announcement: 9 of the 16 beats in the 2026-10-31 trial
+    // arrived on paper. It keeps "before anyone can find the retired
+    // inspector" because that ties it to beat 2's discovery.
     const beatActorRule = worldPressure
         ? 'A beat must be something a narrator can actually perform in a single scene — the world moves: something arrives, opens, flourishes, is discovered, fails, runs short, or changes how ordinary life works. People and institutions may act, react, and adapt inside a beat, but the initiating development applies to everyone it reaches, never a plan aimed at particular people.'
         : 'A beat must be something a narrator can actually perform in a single scene — someone does, demands, refuses, offers, or reveals something; something arrives or is discovered; a deadline moves.';
@@ -176,13 +191,25 @@ export function buildStoryPlanSystemPrompt(sectionKeys = null, lens = 'open') {
         : `- The Harbor Lease — The dockmaster wants the guild's warehouse back before the autumn fleet arrives, and a damning inspection report gives her the grounds; it builds toward a hearing before the harbor council where the guild must answer the report, and losing it could cost them the warehouse.
   1. The dockmaster's clerk posts an inspection notice on the warehouse door, citing rot no one on the crew has seen.
   2. A carpenter hired to check the beams finds them sound and points out that the notice was signed by an inspector who retired last spring.
-  3. The dockmaster moves the hearing up a week, before anyone can find the retired inspector.
+  3. The dockmaster turns up at the warehouse with a harbor warden and, in front of the crew, announces that the hearing has been moved up a week, before anyone can find the retired inspector.
 
 - The Spare Room — Mira wants to stop being her brother's rescuer, and his plan to move in "just for a month" makes it urgent; it builds toward Mira telling him what she will and won't do, which could end with him leaving angry or her giving him a key on her terms.
   1. Mira's brother asks {{user}} to help talk her round, saying she always listens to them.
   2. Mira finds out he went to {{user}} before asking her, and calls off the dinner where she had planned to say yes.
   3. Her brother gives notice on his flat and tells their mother it is settled, so refusing him now means refusing them both.`;
-    const beatsRule = hooksOnly
+    // A pitch request shows the same two examples with their beat lines
+    // removed, so the description format is still demonstrated and no beat
+    // format is.
+    const pitchExamples = examples.split('\n').filter(line => !/^\s+\d+\.\s/.test(line)).join('\n');
+    const beatsRule = pitchOnly
+        ? (hooksOnly
+            ? `Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone. ${PITCH_VARIETY_RULE}`
+            : `This request is for pitches only. Return each bullet alone: no setup beats and no numbered lists. Setup is written later, one arc at a time, for the pitches the user keeps. ${PITCH_VARIETY_RULE}
+
+Two examples of the format, from unrelated stories. Do not reuse their events.
+
+${pitchExamples}`)
+        : hooksOnly
         ? 'Arcs under "Immediate Hooks" need no setup beats — they are already usable as-is, so return the bullets alone.'
         : `For every arc${has('immediate') ? ' EXCEPT those under "Immediate Hooks"' : ''}, follow the bullet with a numbered list of 2-4 SETUP BEATS: concrete, in-scene events that build toward the arc's turning point. ${beatActorRule} ${BEAT_PROGRESSION_RULE}
 
@@ -202,13 +229,20 @@ ${has('immediate') ? '\nArcs under "Immediate Hooks" need no beats — they are 
         ? `- ${WORLD_PRESSURE_RULE} When an Ambient Conditions block is supplied, weather and sky conditions come from that module: build on its stated conditions, exact-time daylight and one-band weather forecast, rather than inventing conflicting weather or daylight.`
         : '- Develop established threads and cast before adding new rivals, villains, institutions, or other major characters. A story palette may request expansion, but it is a preference rather than a quota.\n- Read the recent story for the routine that has set in and build arcs that disturb it, not the premise.';
 
+    // The arcs-are-plans rule used to say "treat every arc as a hypothesis:
+    // describe attempts, pressures, complications, and possible outcomes",
+    // which asked for a list of outcomes in the same prompt whose beat and
+    // destination rules ask for one event. It now names only what must stay
+    // open (the turning point's outcome) and what must never be claimed
+    // (planned events as history). It says nothing about beats, because this
+    // line also reaches pitch and Hooks-only requests, which ask for none.
     return `${introRule}
 
 ABSOLUTE RULES:
 - Output ONLY the story plan document. Never continue the roleplay or write any part of it as a scene. Summarizing what an NPC asks, offers, or reveals is planning, not dialogue.
 - Frame every idea as a future arc, chapter, or episode — never a time frame ("three days later", "next month").
 ${sortRule}
-- Treat every arc as a hypothesis: describe attempts, pressures, complications, and possible outcomes, and never claim an uncertain outcome succeeds.
+- Arcs are plans, not established facts: leave the turning point's outcome unresolved, and never present planned events as already having happened.
 - ${PLAYER_AGENCY_RULE}
 - ${STORY_GROUNDING_RULE}
 ${castDevelopmentRule}

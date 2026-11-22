@@ -18,7 +18,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { resetCoreStubs, setFakeChat } from './stubs/core.js';
 import {
     getLedger, addLedgerEntry, addManualLedgerEntry, updateLedgerEntry,
-    getInteriorityData, saveSettings, getTurnCounter,
+    getInteriorityData, saveInteriorityData, saveSettings, getTurnCounter,
     getOrCreateMsgKeyForIndex,
 } from '../interiority/data.js';
 import { validateAndApply, assembleNpcBlocks } from '../interiority/generation.js';
@@ -377,8 +377,33 @@ describe('validateAndApply — evidence boundaries (spec §3)', () => {
         await validateAndApply({ npcs: [] }, ['Mara'], 1);
         const key = getOrCreateMsgKeyForIndex(1);
         const record = getInteriorityData().perMessage[key];
-        expect(Array.isArray(record.lifecycleHistorySnapshot)).toBe(true);
+        expect(record.lifecycleHistorySnapshot).toEqual({ lastId: null, lastAt: null });
         expect(record.evidenceBoundariesSnapshot).toEqual({});
+    });
+
+    test('the lifecycle snapshot is a rollback point, not a copy of the history', async () => {
+        setFakeChat(CHAT);
+        for (let i = 0; i < MAX_LIFECYCLE_EVENTS; i++) {
+            recordLifecycleEvent({ npc: 'Mara', action: `old-${i}`, outcome: 'completed', source: 'engine', turn: 0 });
+        }
+        await validateAndApply({ npcs: [] }, ['Mara'], 1);
+        const record = getInteriorityData().perMessage[getOrCreateMsgKeyForIndex(1)];
+        const last = getLifecycleHistory().at(-1);
+        expect(record.lifecycleHistorySnapshot).toEqual({ lastId: last.id, lastAt: last.at });
+        expect(JSON.stringify(record.lifecycleHistorySnapshot).length).toBeLessThan(100);
+    });
+
+    test('full-copy snapshots from older versions shrink on the next perMessage write', async () => {
+        setFakeChat(CHAT);
+        recordLifecycleEvent({ npc: 'Mara', action: 'before', outcome: 'completed', turn: 0 });
+        const legacy = JSON.parse(JSON.stringify(getLifecycleHistory()));
+        const data = getInteriorityData();
+        data.perMessage['mu-legacy'] = { reactions: [], lifecycleHistorySnapshot: legacy, generatedAt: 1 };
+        saveInteriorityData(data);
+
+        await validateAndApply({ npcs: [] }, ['Mara'], 1);
+        expect(getInteriorityData().perMessage['mu-legacy'].lifecycleHistorySnapshot)
+            .toEqual({ lastId: legacy[0].id, lastAt: legacy[0].at });
     });
 });
 
@@ -409,7 +434,7 @@ describe('lifecycle rollback restores', () => {
             recordLifecycleEvent({ npc: 'Mara', action: `old-${i}`, outcome: 'completed', source: 'engine', turn: 0 });
         }
         const snapshot = getLifecycleHistorySnapshot();
-        expect(snapshot).toHaveLength(MAX_LIFECYCLE_EVENTS);
+        expect(getLifecycleHistory()).toHaveLength(MAX_LIFECYCLE_EVENTS);
 
         for (let i = 0; i < 3; i++) {
             recordLifecycleEvent({ npc: 'Mara', action: `new-${i}`, outcome: 'completed', source: 'engine', turn: 1 });
@@ -418,6 +443,55 @@ describe('lifecycle rollback restores', () => {
 
         expect(restoreLifecycleHistorySnapshot(snapshot)).toBe(3);
         expect(getLifecycleHistory().filter(e => e.action.startsWith('new-'))).toEqual([]);
+    });
+
+    test('a snapshot taken on an empty history removes every later engine record', () => {
+        setFakeChat(CHAT);
+        const snapshot = getLifecycleHistorySnapshot();
+        recordLifecycleEvent({ npc: 'Mara', action: 'engine-done', outcome: 'completed', source: 'engine', turn: 1 });
+        recordLifecycleEvent({ npc: 'Derek', action: 'user-done', outcome: 'completed', source: 'user', turn: 1 });
+        expect(restoreLifecycleHistorySnapshot(snapshot)).toBe(1);
+        expect(getLifecycleHistory().map(e => e.action)).toEqual(['user-done']);
+    });
+
+    test('a rollback point whose record the cap trimmed away falls back to its time', () => {
+        setFakeChat(CHAT);
+        recordLifecycleEvent({ npc: 'Mara', action: 'before', outcome: 'completed', source: 'engine', turn: 0 });
+        const snapshot = getLifecycleHistorySnapshot();
+        // Age the point so every later record is strictly newer than it, the
+        // way real turns are; then push enough to trim the pointed-at record.
+        snapshot.lastAt -= 1000;
+        for (let i = 0; i < MAX_LIFECYCLE_EVENTS; i++) {
+            recordLifecycleEvent({ npc: 'Mara', action: `new-${i}`, outcome: 'completed', source: i === 0 ? 'user' : 'engine', turn: 1 });
+        }
+        expect(getLifecycleHistory().some(e => e.id === snapshot.lastId)).toBe(false);
+
+        expect(restoreLifecycleHistorySnapshot(snapshot)).toBe(MAX_LIFECYCLE_EVENTS - 1);
+        expect(getLifecycleHistory().map(e => e.action)).toEqual(['new-0']);
+    });
+
+    test('a missing rollback record never removes records older than the point', () => {
+        setFakeChat(CHAT);
+        recordLifecycleEvent({ npc: 'Mara', action: 'older', outcome: 'completed', source: 'engine', turn: 0 });
+        recordLifecycleEvent({ npc: 'Mara', action: 'pointed-at', outcome: 'completed', source: 'engine', turn: 0 });
+        const snapshot = getLifecycleHistorySnapshot();
+        const data = getInteriorityData();
+        data.lifecycleHistory = data.lifecycleHistory.filter(e => e.id !== snapshot.lastId);
+        saveInteriorityData(data);
+
+        expect(restoreLifecycleHistorySnapshot(snapshot)).toBe(0);
+        expect(getLifecycleHistory().map(e => e.action)).toEqual(['older']);
+    });
+
+    test('a full-copy snapshot from an older version still rolls back', () => {
+        setFakeChat(CHAT);
+        recordLifecycleEvent({ npc: 'Mara', action: 'before', outcome: 'completed', turn: 0 });
+        const legacy = JSON.parse(JSON.stringify(getLifecycleHistory()));
+        recordLifecycleEvent({ npc: 'Mara', action: 'engine-done', outcome: 'completed', source: 'engine', turn: 1 });
+        recordLifecycleEvent({ npc: 'Derek', action: 'user-done', outcome: 'completed', source: 'user', turn: 1 });
+
+        expect(restoreLifecycleHistorySnapshot(legacy)).toBe(1);
+        expect(getLifecycleHistory().map(e => e.action)).toEqual(['before', 'user-done']);
     });
 
     test('a snapshot with nothing written after it is a no-op', () => {

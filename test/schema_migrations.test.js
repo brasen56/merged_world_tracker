@@ -91,6 +91,17 @@ const LEGACY_FIXTURES = {
         ledger: [{ id: 'i1', npc: 'Mara', action: 'wait', trigger: 'dawn' }],
         perMessage: { 'mu-abc': { generatedAt: 1 } },
     },
+    // Calendar and Ambient had no schema before registration: their legacy
+    // (unstamped) shape IS the shape the modules write, so v0 -> v1 changes
+    // nothing but the manifest stamp.
+    calendar: {
+        version: 1, structure: 'custom', months: [{ name: 'Highsun', days: 30 }, { name: 'Rotmonth', days: 30 }],
+        weekdays: ['Starday', 'Moonday'], era: null, anchor: { year: 1247, month: 2, day: 9, weekday: 1 },
+        dateLine: true, eventsLine: false, phenomena: [],
+        events: [{ id: 'fair', name: 'Harbor Fair', date: { year: 1247, month: 2, day: 20 }, durationDays: 2, repeat: 'yearly' }],
+    },
+    ambient: { enabled: true, climate: 'temperate', hemisphere: 'south', manualSeason: 'spring', variability: 0.5, seed: 0 },
+    ledger: { version: 1, currencies: [], transactions: [], items: [] },
     knowledgeStore: {
         // Includes the real-world legacy ghost: "Import from Lorebook" runs
         // that predate isStoreEntry() registered the store entry itself as an
@@ -683,6 +694,9 @@ const POLICY_BATTERIES = {
     knowledgeCounters: [null, { messageCounter: -1, npcMessageCounter: 'x' }],
     storyPlanner: [null, { arcs: 'x' }, { history: 'x' }, { arcs: ['junk', { id: '' }, { id: 'a', title: 1, body: 1, section: 'nope', status: 'nope', beats: 'x', beatIndex: -1, turnsSinceAdvance: 'x', createdAt: 'x', updatedAt: 'x' }] }],
     interiority: [null, { ledger: 'x' }, { ledger: [{}, { id: 'i' }] }, { deletedIntentions: [{ id: 't', npc: 'n', actions: 'x', triggers: [1] }] }, { perMessage: 'x' }, { perMessage: { bad: {}, 'mu-': {} } }, { perMessage: { 'sd-legacy': {}, '3': {}, 'mu-ok': {} } }, { turnCounter: 'x' }],
+    calendar: [null, 'x', {}, { version: 2, structure: 'gregorian', eventsLine: false, events: [], phenomena: [] }, { version: 1, structure: 'custom', months: 'x', events: [], phenomena: [], eventsLine: true, dateLine: true }],
+    ambient: [null, 'x', {}, { seed: 'x' }, { seed: Number.NaN }, { seed: null }],
+    ledger: [null, 'x', {}, { version: 1, currencies: [], transactions: [], items: [] }, { version: 1, currencies: [], transactions: [], items: [{ id: 'i1', name: 'Sword', qty: 0, carried: true, note: '' }] }],
     knowledgeStore: [null, { registry: 'x' }, { registry: { g: 'junk', b: { uid: -1 } } }, { registry: { Mara: { uid: 0, profileUid: -1 } } }, { registry: { Mara: { uid: 0 }, mara: { uid: 1 } } }, { relationships: 'x' }, { relationships: { r: 'x', s: [{ target: '' }, { target: 't' }, 'junk'] } }, { registry: { t: { uid: 1 } }, relationships: { r: [{ target: 't', type: 'x', source: 'weird' }] } }, { registry: { A: { uid: 0 } }, relationships: { A: [{ target: 'Ghost', type: 'x' }] } }, { stances: { a: 3 } }, { stanceSources: { a: 3 } }, { stanceSources: { a: 'weird' } }, { version: 0 }, { quarantine: 'x' }, { quarantine: { version: 2 } }, { quarantine: { items: 'x' } }, { quarantine: { items: [{}, { store: 'x' }, { store: 'x', reasonCode: 'y' }] } }, { registry: { Mara: { uid: 0, mergedFrom: [{ entityId: null, name: 'Soph', at: 1 }] } } }],
 };
 

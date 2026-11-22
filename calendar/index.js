@@ -4,6 +4,8 @@ import { applyCalendarInjection, clearCalendarInjection } from './injection.js';
 
 const TYPES = ['normal', 'swipe', 'continue', 'regenerate'];
 export function onChatChanged() { clearCalendarInjection({ clearReason: 'chat-changed' }); }
+/** Chat change while the runtime gate pauses `mwt_calendar`: the same cleanup, which never reads the store. */
+export function onChatChangedWhilePaused() { onChatChanged(); }
 export function prepareGeneration(type = 'normal', _options = {}, dryRun = false) {
     if (!dryRun) clearCalendarInjection({ clearReason: TYPES.includes(type) ? 'prompt-history-pending' : 'generation-type-excluded' });
 }

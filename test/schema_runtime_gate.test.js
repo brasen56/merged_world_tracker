@@ -108,6 +108,13 @@ function legacyChatMeta() {
             enabled: true, ledger: [], deletedIntentions: [], turnCounter: 0,
             perMessage: {}, // canonical keys only — no §7.5 deferral in this fixture
         },
+        [KEY.calendar]: {
+            version: 1, structure: 'custom', months: [{ name: 'Highsun', days: 30 }, { name: 'Rotmonth', days: 30 }],
+            weekdays: null, era: null, anchor: { year: 1247, month: 1, day: 15 },
+            dateLine: true, eventsLine: true, events: [], phenomena: [],
+        },
+        [KEY.ambient]: { enabled: true, climate: 'temperate', hemisphere: 'north', seed: 42 },
+        [KEY.ledger]: { version: 1, currencies: [], transactions: [], items: [] },
     };
 }
 
@@ -444,6 +451,7 @@ describe('a paused store\'s module declines its own work (§7.4)', () => {
             Knowledge: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
             StoryPlanner: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
             Interiority: { onMessageReceived: vi.fn(), onMessageDeleted: vi.fn() },
+            Ledger: { onMessageDeleted: vi.fn() },
         };
 
         routeMessageReceived(routed, {}, 3, isModulePausedForCurrentScope);
@@ -458,6 +466,7 @@ describe('a paused store\'s module declines its own work (§7.4)', () => {
         expect(routed.Knowledge.onMessageReceived).toHaveBeenCalledTimes(1);
         expect(routed.StoryPlanner.onMessageReceived).toHaveBeenCalledTimes(1);
         expect(routed.Interiority.onMessageReceived).toHaveBeenCalledTimes(1);
+        expect(routed.Ledger.onMessageDeleted).toHaveBeenCalledTimes(1);
         // The decline is said out loud.
         expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Chronicle declined MESSAGE_RECEIVED'));
     });
@@ -699,5 +708,83 @@ describe('registerSchemaGateRetryHandlers (the Retry button)', () => {
         // store-keyed memo would start the same async reset/hydration twice,
         // overlapping itself).
         expect(runs).toBe(1);
+    });
+});
+
+// ─── Calendar and Ambient join the gate (registered after Part 6) ────────────
+//
+// Both stores shipped before they had a schema, so every existing chat holds
+// them unstamped (legacy 0). Registering them must not change what the
+// modules read: the first open stamps v1 and leaves the record as it was,
+// and an invalid calendar — which the Calendar module keeps in place and
+// reports as "invalid calendar" — is retained, never quarantined away.
+
+describe('applySchemaLoadGate — Calendar and Ambient', () => {
+    const calendar = () => ({
+        version: 1, structure: 'custom', months: [{ name: 'Highsun', days: 30 }, { name: 'Rotmonth', days: 30 }],
+        weekdays: ['Starday', 'Moonday'], era: null, anchor: { year: 1247, month: 2, day: 9, weekday: 1 },
+        dateLine: true, eventsLine: true, phenomena: [],
+        events: [{ id: 'fair', name: 'Harbor Fair', date: { year: 1247, month: 2, day: 20 }, durationDays: 2, repeat: 'yearly' }],
+    });
+    const ambient = () => ({
+        enabled: true, climate: 'temperate', hemisphere: 'south', manualSeason: 'spring', variability: 0.5,
+        seed: 0, pin: null, phenomena: [], coastal: true, tideRange: 'extreme',
+    });
+
+    test('an existing chat\'s unstamped calendar and ambient records are stamped v1 and left unchanged', () => {
+        const meta = getFakeMeta();
+        meta.mwt_calendar = calendar();
+        meta.mwt_ambient = ambient();
+        const { fn, calls } = persistSpy();
+
+        const result = applySchemaLoadGate({ persist: fn });
+
+        expect(result.stores.calendar).toMatchObject({ action: 'migrated', version: 1, quarantined: 0 });
+        expect(result.stores.ambient).toMatchObject({ action: 'migrated', version: 1, quarantined: 0 });
+        expect(meta.mwt_calendar).toEqual(calendar());
+        expect(meta.mwt_ambient).toEqual(ambient());
+        expect(meta[MANIFEST_METADATA_KEY].sections).toMatchObject({ calendar: 1, ambient: 1 });
+        expect(fn).toHaveBeenCalledTimes(1);
+        expect(calls[0].mwt_ambient.seed).toBe(0);
+        expect(getPauseState('calendar')).toBeNull();
+        expect(getPauseState('ambient')).toBeNull();
+
+        // Stamped and object-rooted: the next open takes the fast path.
+        const again = applySchemaLoadGate({ persist: fn });
+        expect(again.stores.calendar.action).toBe('ready');
+        expect(again.stores.ambient.action).toBe('ready');
+        expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    test('an invalid calendar is retained in place — never quarantined, never blocked', () => {
+        const meta = getFakeMeta();
+        const invalid = { ...calendar(), months: [{ name: 'Highsun', days: 99 }] };
+        meta.mwt_calendar = structuredClone(invalid);
+        meta.mwt_ambient = { ...ambient(), seed: 'not-a-number' };
+
+        const result = applySchemaLoadGate({ persist: () => {} });
+
+        expect(result.stores.calendar).toMatchObject({ action: 'migrated', quarantined: 0 });
+        expect(result.stores.ambient).toMatchObject({ action: 'migrated', quarantined: 0 });
+        expect(meta.mwt_calendar).toEqual(invalid);
+        expect(meta.mwt_ambient.seed).toBe('not-a-number');
+        const items = meta[QUARANTINE_METADATA_KEY]?.items ?? [];
+        expect(items.filter(item => item.store === 'calendar' || item.store === 'ambient')).toEqual([]);
+        expect(getPauseState('calendar')).toBeNull();
+    });
+
+    test('an unreadable calendar root pauses only the calendar store', () => {
+        const meta = getFakeMeta();
+        meta.mwt_calendar = 'corrupt';
+        meta.mwt_ambient = ambient();
+
+        const result = applySchemaLoadGate({ persist: () => {} });
+
+        expect(result.stores.calendar).toMatchObject({ action: 'blocked', reason: 'root-not-object' });
+        expect(meta.mwt_calendar).toBe('corrupt');
+        expect(getPauseState('calendar')).toMatchObject({ module: 'calendar', reasonCode: 'root-not-object' });
+        expect(isModulePausedForCurrentScope('Calendar')).toBe(true);
+        expect(result.stores.ambient.action).toBe('migrated');
+        expect(isModulePausedForCurrentScope('Ambient')).toBe(false);
     });
 });

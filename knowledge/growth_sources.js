@@ -1,5 +1,6 @@
 /** Capture receipts may only verify against the originals supplied to the model. */
 import { findQuoteMatch, sendDateToMs } from '../core/index.js';
+import { getReceiptIdentity } from '../core/message_identity.js';
 
 export function verifyGrowthObservations(observations, sources) {
     const messages = sources.map(source => source.msg);
@@ -20,7 +21,15 @@ export function verifyGrowthObservations(observations, sources) {
             claim: o.claim.trim(), quote: o.quote.trim(), verified: index >= 0,
             msgIdx: source ? source.liveIndex ?? null : null,
             ...(source ? { ts: source.ts ?? sendDateToMs(source.msg.send_date),
-                ...(identity ? { sourceIdentity: identity } : {}) } : {}),
+                // The quote never matched, so the citation must not order the
+                // evidence — the timeline treats 'cited' as position-unknown
+                // even though the ts itself is the cited original's.
+                tsSource: index >= 0 ? 'message' : 'cited',
+                ...(identity ? { sourceIdentity: identity } : {}),
+                // Verified receipts thread msgKey (the growth_timeline grouping
+                // key) from the source original; an unconfirmed citation names
+                // no source message, so it never counts as support.
+                ...(index >= 0 ? { msgKey: getReceiptIdentity(source.msg) } : {}) } : {}),
         };
     });
 }

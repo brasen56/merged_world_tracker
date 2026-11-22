@@ -552,7 +552,7 @@ Rules:
 - Your output MUST begin with "### UPDATE:" or "### NO CHANGES" — nothing before it.`;
 }
 
-export function buildDeltaUserMessage({ prevText = '', recentText = '', reminderReason = '' } = {}) {
+export function buildDeltaUserMessage({ prevText = '', recentText = '', reminderReason = '', ledgerSnapshot = '' } = {}) {
     const prev = truncateText(String(prevText).trim(), DELTA_PREV_BUDGET);
     const recent = String(recentText).trim() || 'No recent messages.';
     const lines = [
@@ -570,6 +570,7 @@ export function buildDeltaUserMessage({ prevText = '', recentText = '', reminder
         lines.push('');
         lines.push(`[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the patch in the exact marker format from the system prompt.]`);
     }
+    if (ledgerSnapshot) lines.push('', ledgerSnapshot, 'After the patch, append the separate ledger report requested by the system prompt.');
     return lines.join('\n');
 }
 

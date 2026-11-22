@@ -2,6 +2,8 @@
 
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { renderMaintenanceFindings, renderOverviewSnapshot, wireOverviewPane } from '../dashboard/render.js';
+import { renderGlobalSettingsForm } from '../core/settings_form.js';
+import { SETTINGS_SECTIONS, selectSettingsSection, wireSettingsWorkspace } from '../core/settings_workspace.js';
 
 const snapshot = (overrides = {}) => ({
     worldState: { ok: true, value: { kind: 'stale', msgsSinceRefresh: 3 } },
@@ -101,15 +103,30 @@ describe('Overview pane', () => {
         expect(selected).toEqual(['integrity', 'health']);
     });
 
-    test('Coordinator deep link opens and scrolls to its disclosure', () => {
+    test.each(SETTINGS_SECTIONS)('Settings deep links reveal their owner from $id', ({ id }) => {
         const root = mountPane();
-        const disclosure = document.createElement('details');
-        disclosure.id = 'mwt-settings-generation-coordinator';
-        disclosure.scrollIntoView = vi.fn();
-        root.append(disclosure);
+        root.insertAdjacentHTML('beforeend', `<div class="mwt-modal-body">${renderGlobalSettingsForm({}, {
+            ambient: '<div id="mwt-ambient-settings"></div>',
+        })}</div>`);
+        wireSettingsWorkspace(root);
+        const coordinator = root.querySelector('#mwt-settings-generation-coordinator');
+        const ambient = root.querySelector('#mwt-ambient-settings');
+        coordinator.scrollIntoView = vi.fn();
+        ambient.scrollIntoView = vi.fn();
+        selectSettingsSection(root, id);
+        root.querySelector('.mwt-modal-body').scrollTop = 500;
         root.querySelector('[data-overview-tab="settings"][data-overview-target="generation-coordinator"]').click();
-        expect(disclosure.open).toBe(true);
-        expect(disclosure.scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+        expect(coordinator.closest('.mwt-settings-section').hidden).toBe(false);
+        expect(coordinator.scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+        expect(root.querySelector('.mwt-modal-body').scrollTop).toBe(0);
+        selectSettingsSection(root, id);
+        root.insertAdjacentHTML('beforeend', '<button data-overview-tab="settings" data-overview-target="ambient-settings">Ambient</button>');
+        // The production Overview pane owns these listeners, so put the new link in it.
+        root.querySelector('.mwt-tab-content[data-tab="overview"]').append(root.lastElementChild);
+        wireOverviewPane(root, { collect: () => snapshot(), collectMaintenance: noFindings });
+        root.querySelector('[data-overview-target="ambient-settings"]').click();
+        expect(ambient.closest('.mwt-settings-section').hidden).toBe(false);
+        expect(ambient.scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
     });
 
     test('refresh keeps keyboard focus on the refresh control', () => {
@@ -227,6 +244,19 @@ describe('Maintenance findings', () => {
         const items = [...document.querySelectorAll('.mwt-overview-review li')].map((li) => li.textContent);
         expect(items).toHaveLength(6);
         expect(items.at(-1)).toContain('and 3 more');
+    });
+
+    test('leftover profiles explain intentional removal without requiring an NPC rescan', () => {
+        document.body.innerHTML = renderMaintenanceFindings([{
+            kind: 'relink-candidates', count: 1, relinkNpcs: [], withOtherCandidates: 0,
+            unmatched: [{ npc: 'Removed NPC', count: 1 }], command: 'MWT.profiles.relink()', rows: [],
+        }]);
+        const text = document.body.textContent;
+        expect(text).toContain('No automatic relink is available');
+        expect(text).toContain('separate NPC Profiles lorebook');
+        expect(text).toContain('If this NPC was intentionally removed, delete its profile there too');
+        expect(text).toContain('does not delete its generated profile');
+        expect(document.querySelector('[data-maintenance-action="relink"]')).toBeNull();
     });
 
     test('identity findings summarize by kind without dumping entry previews', () => {

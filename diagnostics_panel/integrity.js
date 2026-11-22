@@ -128,6 +128,8 @@ export const INTEGRITY_STORE_SPECS = Object.freeze(CHAT_METADATA_SCHEMA_IDS.map(
         knowledgeCounters: '🧠 Knowledge counters',
         storyPlanner: '🗺️ Story Planner',
         interiority: '🎭 Interiority',
+        calendar: '📅 Calendar',
+        ambient: '🌦️ Ambient Conditions',
     }[id] ?? id,
 })));
 

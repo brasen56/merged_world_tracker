@@ -12,6 +12,7 @@ import { refreshWorldState, refreshWorldStateDelta } from '../world_state/refres
 import { regenerateSection } from '../world_state/sections.js';
 import { buildRefreshStatusDelta } from '../world_state/delta.js';
 import { render } from '../world_state/render.js';
+import { parseCurrentScene } from '../core/world_state_document.js';
 
 const FACTUAL_DOCUMENT = [
     '## Current Scene',
@@ -28,6 +29,17 @@ const FACTUAL_DOCUMENT = [
 const HOOK_DOCUMENT = `${FACTUAL_DOCUMENT}\n\n## Story Momentum\n- The delay may force a decision.\n\n## Plot Seeds\n- [contact] A courier could arrive with a forged manifest.\n\n## Potential Entrances\n- **Mara** [contact]: may call about the delayed shipment.`;
 
 describe('Phase 3 built-in prompt', () => {
+    test.each(['minimal', 'standard', 'detailed'])('%s models only scalar fields inside the Current Scene template', level => {
+        for (const hooks of ['off', 'passive']) {
+            const prompt = buildDefaultSystemPrompt(hooks, level);
+            const scene = parseCurrentScene(prompt);
+            expect(scene.issues.filter(issue => issue.section === 'Current Scene')).toEqual([]);
+            expect(scene.section.body.trim().split(/\r?\n/).filter(line => line.trim())).toHaveLength(5);
+            expect(prompt.indexOf('Current Scene field rules')).toBeLessThan(prompt.indexOf('\n## Current Scene\n'));
+            expect(prompt).toContain('Never copy instruction labels or rule lists into the document.');
+        }
+    });
+
     test('uses compactness targets, sparse character states, durable retention, and exact unchanged scene fields', () => {
         const prompt = buildDefaultSystemPrompt('passive');
 

@@ -17,6 +17,7 @@ import {
 // setControlBusy keeps `disabled` and `aria-busy` in step on async handlers
 // (a11y plan §4.4).
 import { setControlBusy } from '../core/ui.js';
+import { focusSettingsTarget } from '../core/settings_targets.js';
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 
 import {
@@ -606,6 +607,14 @@ function renderThoughtsList(msgKeys) {
 /**
  * Render the settings panel inside the Interiority tab.
  */
+export function openSettingsPanel() {
+    const panel = getContentEl()?.querySelector('#mwt-int-settings-panel');
+    if (!panel) return;
+    if (!panel.querySelector('#mwt-int-save-settings')) renderSettingsPanel();
+    panel.style.display = 'block';
+    return focusSettingsTarget(panel.querySelector('h3, h4') || panel);
+}
+
 export function renderSettingsPanel() {
     const panel = getContentEl()?.querySelector('#mwt-int-settings-panel');
     if (!panel) return;
@@ -628,7 +637,7 @@ export function renderSettingsPanel() {
 
             <div style="margin-top:12px">
                 <label for="mwt-int-auto-mode"><input type="checkbox" id="mwt-int-auto-mode" ${s.autoMode ? 'checked' : ''}> Auto-generate on each AI message</label>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, thoughts are generated automatically when an AI message lands. When OFF, use the 💭 Generate button per message.</p>
+                <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, thoughts are generated automatically when an AI message lands. When OFF, generate them when you want with the 💭 Generate Now button above, or /wt-thoughts.</p>
             </div>
 
             <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
@@ -746,8 +755,8 @@ function wireEvents(el) {
         const panel = el.querySelector('#mwt-int-settings-panel');
         if (panel) {
             const isHidden = panel.style.display === 'none';
-            panel.style.display = isHidden ? 'block' : 'none';
-            if (isHidden) renderSettingsPanel();
+            if (isHidden) openSettingsPanel();
+            else panel.style.display = 'none';
         }
     });
 

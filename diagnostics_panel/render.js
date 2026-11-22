@@ -31,7 +31,9 @@
  * epoch, which lorebooks this chat resolves to and WHY (re-derived
  * read-only — opening the tab never saves a binding), per-book hydration +
  * store versions, saved bindings, and the loud fallback-to-global warning
- * fueled by Phase 3's scope_fallback_global counter. Fully synchronous —
+ * fueled by Phase 3's scope_fallback_global counter, then the storage meter
+ * (renderStorageSection: localStorage fill by key family + this chat's MWT
+ * metadata sizes). Fully synchronous —
  * open-and-read, no wiring needed.
  *
  * Phase 9 added the 💉 Injection tab (./injection.js for the snapshot,
@@ -111,7 +113,7 @@ import { collectScopeSnapshot } from './scope_storage.js';
 // Schema plan Part 5 (§9.1): the schema-status collector + renderer behind the
 // Scope & storage tab's new schema section (stored/current versions, gate
 // state, migration persisted, quarantine counts, paused reasons).
-import { collectSchemaStatusSnapshot } from './schema_status.js';
+import { collectSchemaStatusSnapshot, SCHEMA_STATUS_LABELS } from './schema_status.js';
 // Direct core/diagnostics.js import (NOT the barrel) per the §II.3 alias-trap
 // rule: the payload reveal must read the REAL Phase 2 snapshot store, and the
 // Phase 11 log reveal must read the REAL Phase 0 ring.
@@ -602,7 +604,7 @@ export function renderEnvironmentPane() {
  * Layout, in design §I.5 Tab 3 order: stat header (version · scope · epoch) →
  * the resolution banner (the "why", with the loud fallback warning) → the
  * identity/book kv table → per-book hydration + store version → saved
- * bindings → the Phase 3 counter line.
+ * bindings → the Phase 3 counter line → the storage meter.
  *
  * @param {object} snapshot — collectScopeSnapshot() output
  * @param {{formatTime?: function(number): string}} [opts]
@@ -726,12 +728,153 @@ export function renderScopeSnapshot(snapshot, { formatTime = (ts) => new Date(ts
             <p class="mwt-diag-env-subheading">Saved bindings (${escapeHtml(String(s.bindings?.count ?? bindings.length))}) — stable identity key → book names</p>
             ${bindingsBlock}
             ${fallbackNote}
+            ${renderStorageSection(s.storage)}
             ${errorNote}
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. This tab re-derives the resolution
-                READ-ONLY: opening it never saves a binding or touches a book (that is <code>resolveBookNames()</code>'s
-                job, on the next real resolve). For the same data in the console run <code>MWT.diagnostics.scope()</code>;
+                READ-ONLY: opening it never saves a binding, touches a book, or writes browser storage (binding is
+                <code>resolveBookNames()</code>'s job, on the next real resolve). For the same data in the console run <code>MWT.diagnostics.scope()</code>;
                 <code>MWT.scope.diagnose()</code> adds the raw context fields, and <code>MWT.scope.bindings()</code>
                 prints the bindings table. Identity values contain your card/chat names — skim before pasting publicly.</p>
+        </div>
+    `;
+}
+
+/** Labels for the chat-metadata rows that are not registry stores. */
+const CHAT_METADATA_EXTRA_LABELS = Object.freeze({
+    calendar: '📅 Calendar',
+    ambient: '🌦️ Ambient Conditions',
+    contextBudget: 'Context budget',
+    schemaManifest: 'Schema manifest',
+    quarantine: 'Recovery (quarantine) container',
+});
+
+/**
+ * Render the storage meter (the `storage` field of collectScopeSnapshot()):
+ * the localStorage fill bar against the APPROXIMATE quota with MWT's share by
+ * key family, then the serialized size of each MWT store in this chat's
+ * metadata. Pure string builder; labels are escaped even though they are all
+ * MWT-authored, because the snapshot is also the console/report shape.
+ *
+ * @param {object} storage — collectScopeSnapshot().storage
+ * @returns {string} markup for the section
+ */
+export function renderStorageSection(storage) {
+    const st = storage || {};
+    const local = st.local || {};
+    const meta = st.chatMetadata || {};
+    const num = (n) => (typeof n === 'number' && Number.isFinite(n) ? n.toLocaleString() : '?');
+    const dim = (html) => `<span class="mwt-diag-dim">${html}</span>`;
+
+    let localBlock;
+    if (!local.available) {
+        localBlock = `<p class="mwt-diag-note">${escapeHtml(String(local.note || 'Browser storage could not be read.'))}</p>`;
+    } else {
+        const quota = Number(local.approxQuotaChars) || 0;
+        const total = Number(local.totalChars) || 0;
+        const pct = quota > 0 ? (total / quota) * 100 : 0;
+        const warn = local.level === 'warn';
+        const families = Array.isArray(local.families) ? local.families : [];
+        const share = (chars) => (total > 0 ? `${Math.round((chars / total) * 1000) / 10}%` : '—');
+        const familyRow = (f) => `
+            <tr data-storage-family="${escapeHtml(String(f.id))}">
+                <td class="mwt-diag-storage-name">${escapeHtml(String(f.label ?? f.id))}</td>
+                <td>${f.keys ? num(f.keys) : dim('0')}</td>
+                <td>${f.keys ? num(f.chars) : dim('0')}</td>
+                <td>${f.keys ? share(f.chars) : dim('—')}</td>
+            </tr>`;
+        const mwtFamilies = families.filter((f) => f.mwt);
+        const mwtKeys = mwtFamilies.reduce((sum, f) => sum + (Number(f.keys) || 0), 0);
+        const label = `${num(total)} of ≈${num(quota)} characters (${Math.round(pct)}% of the approximate limit)`
+            + (pct > 100 ? ' — past the estimate; this browser allows more' : '');
+        const historyChars = Number(families.find((f) => f.id === 'knowledgeHistory')?.chars) || 0;
+        const historyBudget = Number(local.historyBudgetChars) || 0;
+        const historyRule = historyBudget > 0
+            ? `It uses ${num(historyChars)} of its ${num(historyBudget)}-character budget`
+                + `${Number(local.historyCap) > 0 ? `, at most ${num(local.historyCap)} versions per NPC` : ''}. `
+                + 'Past the budget Knowledge removes the oldest saved versions, and removes more if storage fills anyway. '
+                + 'It never touches lorebook entries.'
+            : 'When storage fills, Knowledge removes the oldest saved versions to make room and never touches lorebook entries.';
+        localBlock = `
+            ${warn && local.warning ? `<ul class="mwt-diag-scope-warnings"><li>⚠ ${escapeHtml(String(local.warning))}</li></ul>` : ''}
+            <div class="mwt-diag-storage-meter">
+                <div class="mwt-diag-storage-bar" role="meter" aria-label="Browser storage used (approximate)"
+                    aria-valuemin="0" aria-valuemax="${quota}" aria-valuenow="${Math.min(total, quota)}"
+                    aria-valuetext="${escapeHtml(label)}">
+                    <div class="mwt-diag-storage-fill${warn ? ' mwt-diag-storage-fill--warn' : ''}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div>
+                </div>
+                <span class="mwt-diag-storage-label">${escapeHtml(label)}</span>
+            </div>
+            <table class="mwt-diag-env-table">
+                <thead><tr><th>Key family</th><th>Keys</th><th>Characters</th><th>Share</th></tr></thead>
+                <tbody>
+                    ${mwtFamilies.map(familyRow).join('')}
+                    <tr class="mwt-diag-storage-subtotal" data-storage-family="mwt-total">
+                        <td class="mwt-diag-storage-name">MWT total</td>
+                        <td>${num(mwtKeys)}</td>
+                        <td>${num(local.mwtChars)}</td>
+                        <td>${share(Number(local.mwtChars) || 0)}</td>
+                    </tr>
+                    ${families.filter((f) => !f.mwt).map(familyRow).join('')}
+                </tbody>
+            </table>
+            ${local.unreadableKeys > 0 ? `<p class="mwt-diag-note">⚠ ${num(local.unreadableKeys)} key(s) could not be read, so these totals are a minimum.</p>` : ''}
+            <p class="mwt-diag-note"><strong>The limit is approximate.</strong> Browsers do not report the real quota; most allow
+                about 5 million characters per site (Chrome, Edge and Firefox a little over 5.2 million), shared by SillyTavern
+                and every extension. Restore history is the MWT family that grows. ${escapeHtml(historyRule)}
+                Settings normally live on the server —
+                that row only counts a fallback copy written when SillyTavern's extension settings were unavailable.</p>`;
+    }
+
+    let metaBlock;
+    if (!meta.available) {
+        metaBlock = `<p class="mwt-diag-note">${escapeHtml(String(meta.note || 'Chat metadata could not be read.'))}</p>`;
+    } else {
+        const rows = Array.isArray(meta.rows) ? meta.rows : [];
+        const sizeCell = (row) => (!row.present
+            ? dim('absent')
+            : (row.chars === null || row.chars === undefined ? diagBadge('unreadable', 'warn') : num(row.chars)));
+        // Two columns, the metadata key under the store label, so the table
+        // fits a phone without sideways scrolling.
+        const namedRows = rows.map((row) => `
+            <tr data-meta-store="${escapeHtml(String(row.id))}">
+                <td class="mwt-diag-storage-name">${escapeHtml(String((row.registered ? SCHEMA_STATUS_LABELS[row.id] : CHAT_METADATA_EXTRA_LABELS[row.id]) ?? row.id))}
+                    <div class="mwt-diag-storage-key"><code>${escapeHtml(String(row.key ?? ''))}</code></div></td>
+                <td>${sizeCell(row)}</td>
+            </tr>`).join('');
+        const bucketRow = (id, labelHtml, bucket) => `
+            <tr data-meta-store="${id}">
+                <td class="mwt-diag-storage-name">${labelHtml}
+                    <div class="mwt-diag-storage-key">${num(bucket?.keys ?? 0)} key(s)</div></td>
+                <td>${num(bucket?.chars ?? 0)}</td>
+            </tr>`;
+        metaBlock = `
+            <table class="mwt-diag-env-table">
+                <thead><tr><th>Store · metadata key</th><th>Characters (JSON)</th></tr></thead>
+                <tbody>
+                    ${namedRows}
+                    ${meta.otherMwt?.keys > 0 ? bucketRow('otherMwt', 'Other MWT keys (<code>mwt_*</code>)', meta.otherMwt) : ''}
+                    <tr class="mwt-diag-storage-subtotal" data-meta-store="mwt-total">
+                        <td class="mwt-diag-storage-name">MWT total</td>
+                        <td>${num(meta.mwtChars)}</td>
+                    </tr>
+                    ${bucketRow('other', 'Other (SillyTavern and other extensions)', meta.other)}
+                </tbody>
+            </table>`;
+    }
+
+    const errorNote = Array.isArray(st.errors) && st.errors.length
+        ? `<p class="mwt-diag-note">⚠ Some sizes degraded: ${escapeHtml(st.errors.join(' · '))}</p>`
+        : '';
+
+    return `
+        <div class="mwt-diag-storage" data-diag-storage="1">
+            <p class="mwt-diag-env-subheading">Browser storage (localStorage) — this site, every extension</p>
+            ${localBlock}
+            <p class="mwt-diag-env-subheading">Chat metadata — MWT stores in this chat</p>
+            ${metaBlock}
+            <p class="mwt-diag-note">Chat metadata is saved in the chat file on the server, not in browser storage, so it
+                doesn't count toward the browser limit.</p>
+            ${errorNote}
         </div>
     `;
 }
@@ -1328,7 +1471,7 @@ export function renderLastRequestSnapshot(snapshot, { formatTime = (ts) => new D
             ${historySection}
             <p class="mwt-diag-note">⛔ next to a trigger means the panic switch was already ON when that request fired. That is a gate leak for
                 <code>message_received</code> / <code>swipe</code> / <code>edit</code>, and expected for <code>manual</code> / <code>slash_command</code>
-                — the 💭 Generate button and <code>/wt-thoughts</code> are explicit user intent and bypass the switch by design. A call with panic
+                — the 💭 Generate Now button and <code>/wt-thoughts</code> are explicit user intent and bypass the switch by design. A call with panic
                 <em>off</em> but a long duration was simply still in flight when the switch was flipped, which is not a leak.</p>
             <p class="mwt-diag-note">Open-and-read — re-open this tab to refresh. Telemetry by construction: the capture records ABOUT a call — module,
                 trigger, panic state, mode, model/profile, HTTP status, duration, retries, finish_reason, token usage, error class — and NEVER the prompt, API key, custom

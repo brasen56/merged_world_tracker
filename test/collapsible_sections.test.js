@@ -13,9 +13,7 @@ import { getFakeMeta, resetCoreStubs } from './stubs/core.js';
 import { state, addManualLedgerEntry, getLedger, setLedgerEntryDormant } from '../interiority/data.js';
 import { renderContent } from '../interiority/render.js';
 
-// index.js cannot be imported under Vitest (top-level SillyTavern wiring), so
-// the Settings markup is checked from source, like accessible_names.test.js.
-import indexSource from '../index.js?raw';
+import { renderGlobalSettingsForm } from '../core/settings_form.js';
 
 /** A fresh modal shell with the Interiority tab rendered into it. */
 function mountInteriorityTab() {
@@ -86,19 +84,15 @@ describe('Interiority disclosures', () => {
     });
 });
 
-describe('Settings tab disclosures', () => {
-    /** renderSettingsTab()'s sections, up to the backup panel, with ${…} blanked. */
-    function settingsMarkup() {
-        const start = indexSource.indexOf('<details class="mwt-settings-disclosure"');
-        const end = indexSource.indexOf('${renderBackupPanel()}', start);
-        // None of this template's expressions contain a `}` of their own.
-        return indexSource.slice(start, end).replace(/\$\{[^}]*\}/g, '');
-    }
-
-    test('Save and Sync sit outside every collapsible section', () => {
+describe('Settings workspace replaces global disclosures', () => {
+    test('all seven sections stay mounted and global Save sits outside them', () => {
         const host = document.createElement('div');
-        host.innerHTML = settingsMarkup();
-        expect(host.querySelectorAll('details.mwt-settings-disclosure')).toHaveLength(6);
+        host.innerHTML = renderGlobalSettingsForm({});
+        expect(host.querySelectorAll('details.mwt-settings-disclosure')).toHaveLength(0);
+        expect(host.querySelectorAll('.mwt-settings-section')).toHaveLength(7);
+        expect(host.querySelectorAll('.mwt-settings-section:not([hidden])')).toHaveLength(1);
+        expect(host.querySelector('#mwt-s-save').closest('.mwt-settings-section')).toBeNull();
+        expect(host.querySelector('#mwt-s-sync').closest('.mwt-settings-section').id).toBe('mwt-settings-section-connection');
         for (const id of ['mwt-s-save', 'mwt-s-sync']) {
             const button = host.querySelector(`#${id}`);
             expect(button, id).not.toBeNull();

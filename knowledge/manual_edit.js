@@ -3,8 +3,8 @@ import { captureScope, scopeStillCurrent } from '../core/scope.js';
 import { state } from './state.js';
 import { getLorebookName } from './scope.js';
 import { getRegistryEntry, isSameNpcByName, registerEntry } from './registry.js';
-import { assertHydrated, isStoreEntry, refreshWorldInfoEditor } from './store.js';
-import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
+import { assertHydrated, refreshWorldInfoEditor } from './store.js';
+import { isInternalEntry } from './internal_entries.js';
 import { loadCleanupBook } from './cleanup_persistence.js';
 import { writeToLorebook } from './lorebook.js';
 import { stripRelationshipBlock, applyCurrentRelationshipBlock } from './relationships.js';
@@ -40,7 +40,7 @@ function checkTarget(session, entries, checkFreshness = true) {
     catch (err) { return refuse('not-hydrated', err.message); }
     const entry = entries[session.uid];
     if (!entry) return refuse('destination-missing', 'Manual edit refused: the entry no longer exists.');
-    if (isStoreEntry(entry) || isCleanupRecoveryEntry(entry)) {
+    if (isInternalEntry(entry)) {
         return refuse('bookkeeping-entry', 'Manual edit refused: the target is module bookkeeping.');
     }
     if (!isSameNpcByName(entry.comment, session.name, Object.values(entries).map(candidate => candidate?.comment))) {

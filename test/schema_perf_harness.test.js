@@ -34,6 +34,7 @@ import { STORE_SCHEMAS } from '../schema/registry.js';
 import { runFastLoadGate } from '../schema/gate.js';
 import { prepareStore } from '../core/schema.js';
 import { createSchemaManifest } from '../schema/manifest.js';
+import { appendGrowthApprovalToBook } from '../knowledge/growth_history.js';
 
 // ─── Reference-scale fixture ─────────────────────────────────────────────────
 //
@@ -49,6 +50,23 @@ const RAW_PER_NPC = 30;
 const CONSOLIDATED_PER_NPC = 5;
 // 55 × (30 raw + 5 consolidated) = 1,925 records ≈ the reference chat's scale.
 const REFERENCE_RECORDS = NPC_COUNT * (RAW_PER_NPC + CONSOLIDATED_PER_NPC);
+
+test('Growth history at the ten-approval cap: whole-book serialization baseline', () => {
+    const wi = { entries: {} };
+    const approved = { personality: `${'Patient and observant; '.repeat(20)}Waits.`, voice: `${'Speaks softly; '.repeat(22)}Pauses.` };
+    const changes = Object.entries(approved).map(([field, after]) => ({ field, action: 'keep', before: after, after, evidenceIds: ['obs-1'] }));
+    for (let npc = 0; npc < 36; npc++) {
+        for (let i = 0; i < 10; i++) appendGrowthApprovalToBook(wi, `npc-${npc}`, {
+            approved, current: approved, changes, acceptedAt: 1_700_000_000_000 + i * 1000,
+        });
+    }
+    const start = performance.now();
+    const json = JSON.stringify(wi);
+    const elapsed = performance.now() - start;
+    const bytes = new TextEncoder().encode(json).length;
+    console.log(`[perf] Growth history: 36 NPCs × 10 approvals, ${bytes} UTF-8 whole-book bytes, ${(bytes / 36).toFixed(0)} bytes/NPC; stringify ${elapsed.toFixed(3)} ms (recorded, no budget)`);
+    expect(JSON.parse(json).entries).toEqual(wi.entries);
+});
 
 function pad(index, width = 4) {
     return String(index).padStart(width, '0');
@@ -211,6 +229,64 @@ function referenceKnowledgeStore() {
     };
 }
 
+/**
+ * A full custom calendar at its authoring ceilings where they bite: 24 months,
+ * 14 weekdays, 40 events, and the 16-rule dated-phenomena cap. The validator
+ * (core/calendar_math.js validateCalendarRecord) walks all of it.
+ */
+function referenceCalendar() {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWX';
+    const months = Array.from({ length: 24 }, (_, i) => ({ name: `Month ${letters[i]}`, days: 30 }));
+    const weekdays = Array.from({ length: 14 }, (_, i) => `Day ${letters[i]}`);
+    return {
+        version: 1,
+        structure: 'custom',
+        months,
+        weekdays,
+        era: 'Reference Era',
+        anchor: { year: 1247, month: 6, day: 18, weekday: 3 },
+        dateLine: true,
+        eventsLine: true,
+        events: Array.from({ length: 40 }, (_, i) => ({
+            id: `event-${pad(i)}`,
+            name: `Festival ${letters[i % 24]}`,
+            date: { year: 1247, month: (i % 24) + 1, day: (i % 28) + 1 },
+            durationDays: (i % 14) + 1,
+            repeat: i % 2 === 0 ? 'yearly' : 'none',
+        })),
+        phenomena: Array.from({ length: 16 }, (_, i) => ({
+            id: `dated-${pad(i)}`,
+            shape: 'dated',
+            name: `Reference omen ${i}`,
+            clause: `a reference omen ${i} hangs over the harbor`,
+            start: { year: 1247, month: (i % 24) + 1, day: 1 },
+            durationDays: 3,
+            repeat: 'yearly',
+            end: null,
+        })),
+    };
+}
+
+/** A configured Ambient record: every settings field the module writes. */
+function referenceAmbient() {
+    return {
+        enabled: true,
+        climate: 'temperate',
+        hemisphere: 'north',
+        manualSeason: 'spring',
+        variability: 0.5,
+        seed: 2654435761,
+        latitude: null,
+        clockAhead: 0,
+        moonEpochOffset: null,
+        coastal: true,
+        tideRange: 'normal',
+        setupAsked: true,
+        pin: null,
+        phenomena: [],
+    };
+}
+
 /** The full reference chat, as raw (pre-v1) chat metadata would hold it. */
 function buildReferenceFixture() {
     return {
@@ -220,6 +296,14 @@ function buildReferenceFixture() {
         knowledgeCounters: referenceKnowledgeCounters(),
         storyPlanner: referenceStoryPlanner(),
         interiority: referenceInteriority(),
+        calendar: referenceCalendar(),
+        ambient: referenceAmbient(),
+        ledger: {
+            version: 1,
+            currencies: [{ id: 'c1', name: 'gold', decimals: 0, badge: true }],
+            transactions: Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, currency: 'c1', amount: i % 2 ? -3 : 5, kind: 'entry', note: 'Campaign entry', date: null })),
+            items: Array.from({ length: 20 }, (_, i) => ({ id: `i${i}`, name: `Item ${i}`, qty: 1, carried: i < 15, note: '' })),
+        },
         knowledgeStore: referenceKnowledgeStore(),
     };
 }

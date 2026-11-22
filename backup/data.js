@@ -25,10 +25,13 @@ export const SECTION_KEYS = Object.freeze([
     'knowledgeCounters',
     'storyPlanner',
     'interiority',
+    'calendar',
+    'ambient',
+    'ledger',
     'knowledgeStore',
 ]);
 
-/** The six chat_metadata keys. Settings and other global/localStorage data are not included. */
+/** The chat_metadata keys a backup carries. Settings and other global/localStorage data are not included. */
 export const METADATA_KEYS = Object.freeze({
     worldState: 'world_state_tracker_metadata',
     chronicle: 'session_chronicle_data',
@@ -36,9 +39,61 @@ export const METADATA_KEYS = Object.freeze({
     knowledgeCounters: 'knowledge_tracker_counters',
     storyPlanner: 'story_planner_data',
     interiority: 'mwt_interiority',
+    calendar: 'mwt_calendar',
+    ambient: 'mwt_ambient',
+    ledger: 'mwt_ledger',
 });
 
 const METADATA_SECTION_KEYS = Object.freeze(Object.keys(METADATA_KEYS));
+
+/**
+ * The chat-metadata sections a backup could carry before Calendar and
+ * Ambient were registered — the six original stores. An envelope that does
+ * not declare its coverage (see {@link getEnvelopeMetadataSections}) is read
+ * as covering only these. Frozen history: never extend this list when a
+ * store is added.
+ */
+export const LEGACY_METADATA_SECTION_KEYS = Object.freeze([
+    'worldState',
+    'chronicle',
+    'knowledgeEvidence',
+    'knowledgeCounters',
+    'storyPlanner',
+    'interiority',
+]);
+
+/**
+ * Which chat-metadata sections an envelope COVERS — the stores its exporter
+ * enumerated, whether or not each was present in the source chat.
+ *
+ * The distinction matters only to exact (replace) restore and undo, which
+ * remove a destination store the backup does not contain. A section that is
+ * absent because the source chat had no such store means "remove it"; a
+ * section absent because the exporting build did not know the store means
+ * nothing at all, and removing the destination's copy would destroy data the
+ * backup never described (an exact restore of a pre-Calendar backup would
+ * delete the chat's calendar).
+ *
+ * Envelopes from this build onward declare `_meta.metadataSections`; an
+ * envelope without a usable declaration is legacy and covers
+ * {@link LEGACY_METADATA_SECTION_KEYS}. Names this build does not know are
+ * dropped, and a section actually present in the envelope always counts as
+ * covered.
+ *
+ * @param {object} envelope
+ * @returns {string[]} covered section names, in METADATA_KEYS order
+ */
+export function getEnvelopeMetadataSections(envelope) {
+    const declared = envelope?._meta?.metadataSections;
+    const covered = new Set(Array.isArray(declared) && declared.every(name => typeof name === 'string')
+        ? declared
+        : LEGACY_METADATA_SECTION_KEYS);
+    const sections = envelope?.sections;
+    if (sections && typeof sections === 'object') {
+        for (const name of Object.keys(sections)) covered.add(name);
+    }
+    return METADATA_SECTION_KEYS.filter(name => covered.has(name));
+}
 
 /**
  * Clone JSON-shaped data without relying on structuredClone (which is not
@@ -115,6 +170,7 @@ export function buildBackupEnvelope({
     knowledgeStore,
     quarantine,
     cleanupRecovery,
+    growthHistory,
     sectionVersions = null,
     identity = null,
     createdAt = new Date().toISOString(),
@@ -160,6 +216,11 @@ export function buildBackupEnvelope({
         chatName,
         messageCount,
         identity: cloneBackupData(identity),
+        // Every chat-metadata section this build enumerates, present in the
+        // chat or not — so an exact restore can tell "the source chat had no
+        // such store" from "the exporting build did not know the store"
+        // (getEnvelopeMetadataSections). Older builds ignore the field.
+        metadataSections: [...METADATA_SECTION_KEYS],
     };
 
     // Quarantine recovery data is NOT a store section (it is subsystem data
@@ -175,6 +236,7 @@ export function buildBackupEnvelope({
     if (cleanupRecovery !== undefined && cleanupRecovery !== null) {
         envelope.cleanupRecovery = cloneBackupData(cleanupRecovery);
     }
+    if (growthHistory !== undefined && growthHistory !== null) envelope.growthHistory = cloneBackupData(growthHistory);
     return envelope;
 }
 

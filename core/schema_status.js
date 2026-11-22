@@ -60,6 +60,9 @@ export const STORE_MODULE_IDS = Object.freeze({
     knowledgeStore: 'knowledge',
     storyPlanner: 'story_planner',
     interiority: 'interiority',
+    calendar: 'calendar',
+    ambient: 'ambient',
+    ledger: 'ledger',
 });
 
 /** Owning module id → every registered store id that module owns. */
@@ -77,6 +80,9 @@ export const MODULE_LABELS = Object.freeze({
     knowledge: 'Knowledge',
     story_planner: 'Story Planner',
     interiority: 'Interiority',
+    calendar: 'Calendar',
+    ambient: 'Ambient Conditions',
+    ledger: 'Ledger',
 });
 
 /**

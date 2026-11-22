@@ -355,6 +355,8 @@ async function applyCleanupOnce({ capture, replacement, actionId, actionType = '
     const write = await writeToLorebook(name, replacement, capture.keywords, uid, {
         bookName,
         beforeWrite: finalEntries => checkCapturedDestination(capture, finalEntries)
+            || (validate && !validate({ original: finalEntries[uid].content || '', replacement, capture })?.ok
+                ? refusal('validation-failed', 'Cleanup ownership or final validation changed before writing.') : null)
             || ((finalEntries[uid].content || '') !== capture.originalContent
                 ? refusal('source-changed-during-persist', 'Cleanup refused: the entry changed before the final write.') : null)
             || checkRecoveryOnFinalLoad(finalEntries, actionId, {
@@ -498,11 +500,31 @@ async function reconcileRestore(record, bookName) {
  * @param {string} opts.actionId
  * @param {(content: string) => {start: number, end: number}|null} [opts.spanOf]
  *   span extractor (default: whole content)
+ * @param {(content: string) => Array<{start:number,end:number}>} [opts.spansOf]
+ *   ordered field value spans; overrides spanOf for disjoint selected-field cleanup
  * @returns {Promise<{ok: boolean, code?: string, error?: string, conflict?: object,
  *   restoredContent?: string}>}
  */
-export async function restoreCleanup({ actionId, spanOf }) {
-    const spanOfContent = typeof spanOf === 'function' ? spanOf : wholeContentSpan;
+export async function restoreCleanup({ actionId, spanOf, spansOf }) {
+    const spanOfContent = typeof spansOf === 'function'
+        ? content => {
+            try {
+                const spans = spansOf(content);
+                return Array.isArray(spans) && spans.length ? spans : null;
+            } catch { return null; }
+        }
+        : content => {
+            const span = (typeof spanOf === 'function' ? spanOf : wholeContentSpan)(content);
+            return span ? [span] : null;
+        };
+    const ownedText = (content, spans) => JSON.stringify(spans.map(span => content.slice(span.start, span.end)));
+    const restoreValues = (content, spans, original, originals) => {
+        let result = content;
+        for (const { span, index } of spans.map((value, position) => ({ span: value, index: position })).sort((a, b) => b.span.start - a.span.start)) {
+            result = result.slice(0, span.start) + original.slice(originals[index].start, originals[index].end) + result.slice(span.end);
+        }
+        return result;
+    };
     const scopeToken = captureScope();
     const bookName = getLorebookName();
 
@@ -555,10 +577,10 @@ export async function restoreCleanup({ actionId, spanOf }) {
     let currentSpan = spanOfContent(current);
     const originalSpan = spanOfContent(record.originalContent);
     const appliedSpan = spanOfContent(record.approvedReplacement);
-    if (!currentSpan || !originalSpan || !appliedSpan) {
+    if (!currentSpan || !originalSpan || !appliedSpan || currentSpan.length !== originalSpan.length || currentSpan.length !== appliedSpan.length) {
         return refusal('span-not-found', 'Restore refused: the cleanup-owned section could not be located in the current entry, the original, or the replacement.', { conflict: conflictPayload });
     }
-    if (current.slice(currentSpan.start, currentSpan.end) !== record.approvedReplacement.slice(appliedSpan.start, appliedSpan.end)) {
+    if (ownedText(current, currentSpan) !== ownedText(record.approvedReplacement, appliedSpan)) {
         return refusal('span-conflict', 'Restore refused: the cleanup-touched content changed after the cleanup was applied (manual edit or later update). Resolve by hand — export the recovery original from the recovery view.', { conflict: conflictPayload });
     }
 
@@ -585,8 +607,7 @@ export async function restoreCleanup({ actionId, spanOf }) {
                 status: 'application-pending',
                 originalContent: current,
                 parentActionId: actionId,
-                approvedReplacement: current.slice(0, currentSpan.start)
-                    + record.originalContent.slice(originalSpan.start, originalSpan.end) + current.slice(currentSpan.end),
+                approvedReplacement: restoreValues(current, currentSpan, record.originalContent, originalSpan),
             });
         } catch (err) {
             return refusal('safeguard-failed', `Restore refused: the pre-restore safeguard could not be saved and verified — nothing was changed. (${err.message})`);
@@ -606,7 +627,7 @@ export async function restoreCleanup({ actionId, spanOf }) {
         entry = latest.entries[record.entryUid];
         const latestContent = entry.content || '';
         const latestSpan = spanOfContent(latestContent);
-        if (!latestSpan || latestContent.slice(latestSpan.start, latestSpan.end) !== record.approvedReplacement.slice(appliedSpan.start, appliedSpan.end)) {
+        if (!latestSpan || latestSpan.length !== appliedSpan.length || ownedText(latestContent, latestSpan) !== ownedText(record.approvedReplacement, appliedSpan)) {
             await tryUpdateCleanupRecord(safeguardId, { status: 'failed' }, bookName);
             return refusal('span-conflict', 'Restore refused: cleanup-touched content changed while saving the safeguard.', { conflict: conflictPayload });
         }
@@ -622,8 +643,7 @@ export async function restoreCleanup({ actionId, spanOf }) {
     }
     if (!safeguarded) return refusal('source-changed-during-persist', 'Restore refused: the entry kept changing while safeguards were saved. Retry when editing has stopped.');
 
-    const originalSpanText = record.originalContent.slice(originalSpan.start, originalSpan.end);
-    const restored = current.slice(0, currentSpan.start) + originalSpanText + current.slice(currentSpan.end);
+    const restored = restoreValues(current, currentSpan, record.originalContent, originalSpan);
     const keywords = Array.isArray(entry.key) ? entry.key : [record.entityName];
     const write = await writeToLorebook(record.entityName, restored, keywords, record.entryUid, {
         bookName,

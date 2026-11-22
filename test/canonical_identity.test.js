@@ -21,11 +21,12 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { resetCoreStubs, setFakeChat } from './stubs/core.js';
-import { state } from '../knowledge/state.js';
+import { state, TRACKER_SENTINEL } from '../knowledge/state.js';
 import { saveSettings as saveKnowledgeSettings } from '../knowledge/settings.js';
-import { _setCacheForTests, _clearCacheForTests, isStoreEntry } from '../knowledge/store.js';
+import { _setCacheForTests, _clearCacheForTests, isStoreEntry, hydrateCurrentBooks, flushAll, STORE_COMMENT, peekStore } from '../knowledge/store.js';
+import { KNOWLEDGE_STORE_VERSION } from '../knowledge/schema.js';
 import {
-    getRegistry, auditRegistryAliases, isSameNpcIdentity, resolveRegistryKey,
+    getRegistry, getStateRegistry, auditRegistryAliases, isSameNpcIdentity, resolveRegistryKey,
 } from '../knowledge/registry.js';
 import {
     loadEntryContent, enrichStagingItem, writeToLorebook,
@@ -308,6 +309,24 @@ describe('loadEntryContent verifies the lorebook label', () => {
 // ─── Fix 1 (import path): From Lorebooks canonical check ────────────────────
 
 describe('importFromLorebooks canonical check', () => {
+    test('both imported registries survive an immediate reload without waiting for debounce', async () => {
+        wiFake.books.set('Knowledge Tracker', { entries: {
+            1: { uid: 1, comment: 'Mira', key: ['Mira'], content: 'Knowledge Ledger: facts' },
+        } });
+        wiFake.books.set('State Tracker', { entries: {
+            4: { uid: 4, comment: `${TRACKER_SENTINEL} Weather`, content: 'Sunny' },
+        } });
+        await importFromLorebooks();
+        const registry = structuredClone(getRegistry());
+        const states = structuredClone(getStateRegistry());
+        expect(Object.keys(registry)).toEqual(['Mira']);
+        expect(Object.keys(states)).toEqual(['Weather']);
+        _clearCacheForTests();
+        await hydrateCurrentBooks();
+        expect(getRegistry()).toEqual(registry);
+        expect(getStateRegistry()).toEqual(states);
+    });
+
     test('an alias entry repairs the canonical orphan record instead of forking a second identity', async () => {
         seedRegistry({ Sophie: { uid: null, type: 'minor', keywords: ['Sophie'] } });
         wiFake.books.set('Knowledge Tracker', {
@@ -351,6 +370,61 @@ describe('importFromLorebooks canonical check', () => {
 // ─── reconcileRegistry: validate/relink/detach + adopt (the repair pass) ─────
 
 describe('reconcileRegistry repairs registry↔entry links non-destructively', () => {
+    test('loads saved identities before repairing and preserves metadata across reload', async () => {
+        const registry = { Mira: { uid: 1, type: 'major', entityId: 'mwt_existing', aliases: ['Captain'], profileUid: 7 } };
+        wiFake.books.set('Knowledge Tracker', { entries: {
+            1: { uid: 1, comment: 'Mira', key: ['Mira'], content: 'Knowledge Ledger: facts' },
+            2: { uid: 2, comment: STORE_COMMENT, content: JSON.stringify({ version: KNOWLEDGE_STORE_VERSION, registry }) },
+        } });
+        const result = await reconcileRegistry(); // No preloaded cache.
+        expect(result.verified).toBe(1);
+        expect(result.adopted).toBe(0);
+        _clearCacheForTests();
+        await hydrateCurrentBooks();
+        expect(getRegistry()).toEqual(registry);
+    });
+
+    test('rejects an unreadable store instead of overwriting it with adopted NPCs', async () => {
+        const book = { entries: {
+            1: { uid: 1, comment: 'Mira', content: 'facts' },
+            2: { uid: 2, comment: STORE_COMMENT, content: '{invalid' },
+        } };
+        wiFake.books.set('Knowledge Tracker', structuredClone(book));
+        await expect(reconcileRegistry()).rejects.toThrow(/not loaded/);
+        expect(wiFake.books.get('Knowledge Tracker')).toEqual(book);
+    });
+
+    test('failed persistence rejects completion and keeps adopted identities available for retry', async () => {
+        wiFake.books.set('Knowledge Tracker', { entries: {
+            1: { uid: 1, comment: 'Mira', content: 'facts' },
+        } });
+        await hydrateCurrentBooks();
+        vi.spyOn(wiFake, 'saveWorldInfo').mockRejectedValueOnce(new Error('disk full'));
+        await expect(reconcileRegistry()).rejects.toThrow(/could not be saved/);
+        expect(getRegistry().Mira.uid).toBe(1);
+        expect(peekStore('Knowledge Tracker').dirty).toBe(true);
+        await flushAll();
+        _clearCacheForTests();
+        await hydrateCurrentBooks();
+        expect(getRegistry().Mira.uid).toBe(1);
+    });
+
+    test('adopted identities are durable before reconciliation reports completion', async () => {
+        wiFake.books.set('Knowledge Tracker', { entries: {
+            1: { uid: 1, comment: 'Mira', key: ['Mira'], content: 'Knowledge Ledger: facts' },
+            2: { uid: 2, comment: 'Tobin', key: ['Tobin'], content: 'Minor NPC facts' },
+        } });
+        await hydrateCurrentBooks();
+        const result = await reconcileRegistry();
+        expect(result.adopted).toBe(2);
+        const expected = structuredClone(getRegistry());
+        _clearCacheForTests(); // Page reload: discard all timers and memory.
+        await hydrateCurrentBooks();
+        expect(getRegistry()).toEqual(expected);
+        expect(Object.keys(getRegistry())).toEqual(['Mira', 'Tobin']);
+        expect((await reconcileRegistry()).verified).toBe(2);
+    });
+
     test('a crossed uid relinks to the NPC\'s real entry and preserves metadata', async () => {
         // reg says Mikhail→67, but uid 67 is physically Marcus. Mikhail's real
         // entry is uid 12. This is the reported warning scenario.

@@ -10,6 +10,8 @@
 
 import { getContextSafe } from './core/context.js';
 import * as Ambient from './ambient/index.js';
+import * as Ledger from './ledger/index.js';
+import { renderLedger, wireLedger } from './ledger/render.js';
 import * as Calendar from './calendar/index.js';
 import { renderCalendarPanel } from './calendar/render.js';
 import { wireCalendarPanel } from './calendar/panel.js';
@@ -39,12 +41,22 @@ import { createSettingsManager, GLOBAL_SETTINGS_DEFAULTS } from './core/settings
 // injections are never rejected by the previous chat's stale snapshots.
 import { getBudgetSettings, saveBudgetSettings, resetBudgetInjections } from './core/budget.js';
 import { createModal, showModal, setStatus, releaseManagedInert } from './core/modal.js';
-import { createFloatingButtonBar, renderApiSettingsFields, readApiSettingsValues, renderConnectionProfileSelect, setControlBusy } from './core/ui.js';
+import { createFloatingButtonBar, setControlBusy } from './core/ui.js';
 // Main modal tab shell — the render/wire seam core/main_tabs.js owns so the
 // main tab bar's exact rendering path is testable under jsdom (index.js
 // itself cannot be imported into Vitest; see test/main_tabbar_adoption.test.js).
 import { renderMainTabShell, wireMainTabBar } from './core/main_tabs.js';
+import { renderGlobalSettingsForm, wireGlobalSettingsForm } from './core/settings_form.js';
+import { openOnboarding, registerOnboardingStartup, refreshPresetPanes } from './core/onboarding.js';
+import { wireSettingsWorkspace, restoreSettingsFocus } from './core/settings_workspace.js';
+import { wireSettingsConfiguration } from './core/settings_configuration.js';
+import { openSettings as openWorldSettings } from './world_state/render.js';
+import { openSettings as openPlannerSettings } from './story_planner/render.js';
+import { showSettingsModal as openChronicleSettings } from './chronicle/render.js';
+import { showKnowledgeSettings } from './knowledge/settings.js';
+import { openSettingsPanel as openInterioritySettings } from './interiority/render.js';
 import { createCommands } from './core/commands.js';
+import { registerItemSlashCommand } from './core/item_command_registration.js';
 import { routeMessageReceived, routeMessageDeleted, routeMessageSwiped, routeMessageEdited, extractMessageIndex } from './core/event_router.js';
 // Diagnostics accessors (Phases 0–1). Read-only peek at the in-memory capture,
 // exposed to testers as window.MWT.diagnostics near the bottom of this file.
@@ -136,19 +148,6 @@ import { auditNpcIdentities, auditProfiles, planProfilePrune, planProfileRelink 
 
 const SETTINGS_KEY = 'merged_world_tracker';   // localStorage key
 
-// ID opts for shared API settings helpers (renderApiSettingsFields / readApiSettingsValues)
-const GLOBAL_API_FIELD_IDS = {
-    urlId: 'mwt-s-api-url',
-    keyId: 'mwt-s-api-key',
-    modelId: 'mwt-s-model',
-    maxTokensId: 'mwt-s-max-tokens',
-    tempId: 'mwt-s-temp',
-    topPId: 'mwt-s-top-p',
-    freqId: 'mwt-s-freq-pen',
-    presId: 'mwt-s-pres-pen',
-    headersId: 'mwt-s-headers',
-};
-
 // ─── SillyTavern imports ────────────────────────────────────────────────────
 
 let eventSource = null;
@@ -173,6 +172,21 @@ if (!registerSlashCommand) {
     if (ctx && typeof ctx.registerSlashCommand === 'function') {
         registerSlashCommand = ctx.registerSlashCommand.bind(ctx);
     }
+}
+
+// The legacy registrar strips wrapping quotes. Inventory's own parser needs
+// them to distinguish a numeric-ending item name from an explicit quantity.
+let registerRawSlashCommand;
+try {
+    const { SlashCommandParser } = await import('../../../../scripts/slash-commands/SlashCommandParser.js');
+    const { SlashCommand } = await import('../../../../scripts/slash-commands/SlashCommand.js');
+    const { SlashCommandArgument } = await import('../../../../scripts/slash-commands/SlashCommandArgument.js');
+    registerRawSlashCommand = (...args) => registerItemSlashCommand({ SlashCommandParser, SlashCommand, SlashCommandArgument }, ...args);
+} catch {
+    // Never pass stripped quotes to inventory's quantity parser.
+    registerRawSlashCommand = (name, _callback, aliases, helpString) => registerSlashCommand?.(
+        name, () => 'Error: This host cannot preserve item-name argument boundaries. Use the Ledger tab.', aliases, helpString,
+    );
 }
 
 // Load macro registration via the modern macro system (requires ST 1.12+)
@@ -226,6 +240,7 @@ const { getSettings, saveSettings } = createSettingsManager({
 const TABS = [
     { id: 'overview', label: '🏠 Overview', module: null },
     { id: 'calendar', label: '📅 Calendar', module: null },
+    { id: 'ledger', label: '💰 Ledger', module: null },
     { id: 'world-state', label: '🌍 World State', module: WorldState },
     { id: 'chronicle', label: '📜 Chronicle', module: Chronicle },
     { id: 'knowledge', label: '🧠 Knowledge', module: Knowledge },
@@ -244,210 +259,17 @@ const TABS = [
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
+let selectedSettingsSection = 'connection';
 function renderSettingsTab() {
-    const s = getSettings();
-    const hasProfile = !!s.connectionProfileId;
-    const apiFieldsStyle = hasProfile ? 'display:none' : '';
-
-    // Accessibility plan §4.4 / Slice 4, in the markup below:
-    //  - decorative leading emoji sit in aria-hidden spans, so a heading is
-    //    "Injection Settings", not "wrench Injection Settings";
-    //  - a `.mwt-label` that labels a whole grid section rather than one
-    //    control is a <div> — a <label> with no control is not a label;
-    //  - the float-button and per-tracker rows point BOTH cells' labels at the
-    //    row's checkbox, so its name reads "World State Visible" rather than
-    //    the six identical "Visible"s the right-hand cell alone would give.
-    // Save writes EVERY section, so its row sits below the collapsible
-    // sections rather than inside one — collapsing that section would hide it.
-    return `
-        <details class="mwt-settings-disclosure" open>
-            <summary><span aria-hidden="true">🔌</span> API Connection</summary>
-            <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-                These global API settings serve as defaults for all modules. Each module can override them in its own Settings panel.
-            </p>
-            <div class="mwt-settings-grid">
-            <label class="mwt-label" style="grid-column:1/2" for="mwt-s-connection-profile">Connection Profile</label>
-            ${renderConnectionProfileSelect('mwt-s-connection-profile', s.connectionProfileId, '— None (use custom API below) —')}
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0;grid-column:1/3">
-                Select a Connection Manager profile to use with all backends (OpenAI, TextGen, etc.) with full preset/instruct support. Leave empty to configure a custom API URL/Key below. Profiles marked (active) are ST's currently selected profile.
-            </p>
-
-            <div id="mwt-s-api-fields" style="grid-column:1/3;${apiFieldsStyle}" class="mwt-settings-grid">
-                ${renderApiSettingsFields(s, GLOBAL_API_FIELD_IDS)}
-            </div>
-            </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🕒</span> Stable History</summary>
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            Defer the newest chat messages from World State, Chronicle, Knowledge, Relationships, Growth, and Story Planner scans. They are included on a later refresh instead of discarded. <strong>2</strong> usually means the latest user/assistant exchange. Interiority is intentionally excluded because it evaluates the current turn.
-        </p>
-            <div class="mwt-settings-grid">
-            <label class="mwt-label" for="mwt-s-recent-history-exclude">Messages to defer</label>
-            <input id="mwt-s-recent-history-exclude" class="mwt-input" type="number" value="${s.recentHistoryExclude ?? 2}" min="0" max="10" step="1">
-            </div>
-        </details>
-
-        <details id="mwt-settings-generation-coordinator" class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🚦</span> Generation Coordinator</summary>
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            All tracker API calls go through one central queue. Each module runs at most one generation at a time; this caps how many may run in parallel <em>across</em> modules, so a burst of tracker work cannot stampede your API endpoint (manual clicks always jump ahead of automatic work). Switching chats cancels queued tracker jobs from the old chat. See what's queued any time with <code>MWT.coordinator.status()</code> in the console.
-        </p>
-            <div class="mwt-settings-grid">
-            <label class="mwt-label" for="mwt-s-api-max-concurrent">Max parallel API calls</label>
-            <input id="mwt-s-api-max-concurrent" class="mwt-input" type="number" value="${s.apiMaxConcurrent ?? 2}" min="1" max="8" step="1">
-            <label class="mwt-label" for="mwt-s-pause-background" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                <input type="checkbox" id="mwt-s-pause-background" ${s.pauseBackgroundJobsDuringGeneration ? 'checked' : ''}>
-                Hold automatic tracker work while you generate
-            </label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
-                When on, automatic calls (auto-refresh, auto-snapshot, NPC updates, auto-thoughts, …) wait until your own generation finishes. Button-pressed generations are never held.
-            </p>
-            </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🔧</span> Injection Settings</summary>
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            Control how each module's entries are injected into the prompt. Depth = how far back from the bottom; Role = which message role. (Knowledge uses SillyTavern's built-in lorebook system and does not use extension prompt injection. Disabling the Knowledge tracker below only stops it from scanning/updating; existing lorebook entries will continue to be injected by SillyTavern's World Info until you disable them manually in the World Info panel.)
-        </p>
-            <div class="mwt-settings-grid">
-            <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">🌍</span> World State</div>
-            <label class="mwt-label" for="mwt-s-ws-depth">Depth</label>
-            <input id="mwt-s-ws-depth" class="mwt-input" type="number" value="${s.worldStateDepth ?? 4}" min="0" max="999">
-            <label class="mwt-label" for="mwt-s-ws-role">Role</label>
-            <select id="mwt-s-ws-role" class="mwt-input">
-                <option value="system" ${s.worldStateRole === 'system' ? 'selected' : ''}>system</option>
-                <option value="user" ${s.worldStateRole === 'user' ? 'selected' : ''}>user</option>
-                <option value="assistant" ${s.worldStateRole === 'assistant' ? 'selected' : ''}>assistant</option>
-            </select>
-
-            <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">📜</span> Chronicle</div>
-            <label class="mwt-label" for="mwt-s-ch-depth">Depth</label>
-            <input id="mwt-s-ch-depth" class="mwt-input" type="number" value="${s.chronicleDepth ?? 4}" min="0" max="999">
-            <label class="mwt-label" for="mwt-s-ch-role">Role</label>
-            <select id="mwt-s-ch-role" class="mwt-input">
-                <option value="system" ${s.chronicleRole === 'system' ? 'selected' : ''}>system</option>
-                <option value="user" ${s.chronicleRole === 'user' ? 'selected' : ''}>user</option>
-                <option value="assistant" ${s.chronicleRole === 'assistant' ? 'selected' : ''}>assistant</option>
-            </select>
-
-            <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">💭</span> Interiority</div>
-            <label class="mwt-label" for="mwt-s-int-depth">Depth</label>
-            <input id="mwt-s-int-depth" class="mwt-input" type="number" value="${s.interiorityDepth ?? 1}" min="0" max="999">
-            <label class="mwt-label" for="mwt-s-int-role">Role</label>
-            <select id="mwt-s-int-role" class="mwt-input">
-                <option value="system" ${s.interiorityRole === 'system' ? 'selected' : ''}>system</option>
-                <option value="user" ${s.interiorityRole === 'user' ? 'selected' : ''}>user</option>
-                <option value="assistant" ${s.interiorityRole === 'assistant' ? 'selected' : ''}>assistant</option>
-            </select>
-
-            <div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">🏷️</span> Structural Boundaries</div>
-            <label class="mwt-label" for="mwt-s-structural-boundaries" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                <input type="checkbox" id="mwt-s-structural-boundaries" ${s.structuralBoundaries !== false ? 'checked' : ''}>
-                <span>Wrap injected blocks in XML tags</span>
-            </label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">
-                Wraps each injected reference block (World State, Plot Seeds, Chronicle) in tags like <code>&lt;mwt_world_state&gt;…&lt;/mwt_world_state&gt;</code>.
-                Recommended for smaller / open models (24–70B) that bleed between sections. Frontier models don't need it; turn off to save a few tokens.
-            </p>
-        </div>
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">📍</span> Floating Buttons</summary>
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            Show or hide individual floating buttons. You can also access the MWT modal from the Extensions panel drawer or the wand menu.
-        </p>
-        <div class="mwt-settings-grid">
-            <label class="mwt-label" for="mwt-s-collapse-float" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                <input type="checkbox" id="mwt-s-collapse-float" ${s.collapseFloatButtons ? 'checked' : ''}>
-                <span>Collapse into single button</span>
-            </label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Replace the 4 floating buttons with one that expands on tap/click.</p>
-
-            <label class="mwt-label" for="mwt-s-show-world"><span aria-hidden="true">🌍</span> World State</label>
-            <label for="mwt-s-show-world" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-world" ${s.showFloatWorld !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-show-chronicle"><span aria-hidden="true">📜</span> Chronicle</label>
-            <label for="mwt-s-show-chronicle" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-chronicle" ${s.showFloatChronicle !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-show-knowledge"><span aria-hidden="true">🧠</span> Knowledge</label>
-            <label for="mwt-s-show-knowledge" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-knowledge" ${s.showFloatKnowledge !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-show-story-planner"><span aria-hidden="true">🗺️</span> Story Planner</label>
-            <label for="mwt-s-show-story-planner" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-story-planner" ${s.showFloatStoryPlanner !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-show-interiority"><span aria-hidden="true">💭</span> Interiority</label>
-            <label for="mwt-s-show-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-interiority" ${s.showFloatInteriority !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-show-settings"><span aria-hidden="true">⚙️</span> Settings</label>
-            <label for="mwt-s-show-settings" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-show-settings" ${s.showFloatSettings !== false ? 'checked' : ''}> Visible</label>
-
-            <label class="mwt-label" for="mwt-s-button-style"><span aria-hidden="true">🎨</span> Style</label>
-            <select id="mwt-s-button-style" class="mwt-input" style="width:auto">
-                <option value="modern" ${(s.buttonStyle || 'modern') === 'modern' ? 'selected' : ''}>Modern (icons-only)</option>
-                <option value="classic" ${s.buttonStyle === 'classic' ? 'selected' : ''}>Classic (text + icon)</option>
-            </select>
-
-            <div></div>
-            <div>
-                <button id="mwt-s-reset-float-positions" class="mwt-btn" title="Restore all floating buttons to their default positions"><span aria-hidden="true">↩</span> Reset Button Positions</button>
-                <p style="font-size:11px;color:var(--mwt-text-dim);margin:4px 0 0">Dragged buttons return to the default right-edge stack. You can also use the <code>/wt-reset-buttons</code> slash command.</p>
-            </div>
-        </div>
-
-        </details>
-
-        <details class="mwt-settings-disclosure">
-            <summary><span aria-hidden="true">🛑</span> Per-Tracker Enable</summary>
-        <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
-            Disable a tracker you don't use: it stops injecting and scanning, and its floating button shows a red ✕
-            (right-click it again to re-enable). To remove a button entirely, uncheck its "Visible" box in the
-            Floating Buttons section above. You can also disable <em>everything</em> at once by right-clicking the ⚙️ button.
-        </p>
-        <div class="mwt-settings-grid">
-            <label class="mwt-label" for="mwt-s-master-off" style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                <input type="checkbox" id="mwt-s-master-off" ${s.injectionMasterOff ? 'checked' : ''}>
-                <span>Disable all trackers (panic switch)</span>
-            </label>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin:0">Stops injection and scanning for every module. Useful for testing or branching a chat. **Lorebook entries need to be manually disabled**.</p>
-
-            <label class="mwt-label" for="mwt-s-enable-world"><span aria-hidden="true">🌍</span> World State</label>
-            <label for="mwt-s-enable-world" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-world" ${s.enableWorldState !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-chronicle"><span aria-hidden="true">📜</span> Chronicle</label>
-            <label for="mwt-s-enable-chronicle" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-chronicle" ${s.enableChronicle !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-knowledge"><span aria-hidden="true">🧠</span> Knowledge</label>
-            <label for="mwt-s-enable-knowledge" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-knowledge" ${s.enableKnowledge !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-story-planner"><span aria-hidden="true">🗺️</span> Story Planner</label>
-            <label for="mwt-s-enable-story-planner" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-story-planner" ${s.enableStoryPlanner !== false ? 'checked' : ''}> Use this tracker</label>
-
-            <label class="mwt-label" for="mwt-s-enable-interiority"><span aria-hidden="true">💭</span> Interiority</label>
-            <label for="mwt-s-enable-interiority" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="mwt-s-enable-interiority" ${s.enableInteriority !== false ? 'checked' : ''}> Use this tracker</label>
-        </div>
-
-        </details>
-
-        <div class="mwt-settings-actions mwt-flex mwt-gap-4" style="flex-wrap:wrap">
-            <button id="mwt-s-save" class="mwt-btn mwt-btn-primary">Save Settings</button>
-            <button id="mwt-s-sync" class="mwt-btn" title="Copy these API settings to all module-specific configs"><span aria-hidden="true">↓</span> Sync to Modules</button>
-        </div>
-
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <p style="color:var(--mwt-text-dim);font-size:12px">
-            <strong>Module-specific settings</strong> are available in each tab's ⚙ Settings button.
-            Use "Sync to Modules" above to push the global API URL/Key/Model to all modules at once.
-        </p>
-        ${renderAmbientSettings()}
-        ${renderBackupPanel()}
-    `;
+    return renderGlobalSettingsForm(getSettings(), {
+        selectedSection: selectedSettingsSection,
+        ambient: renderAmbientSettings({ omitChrome: true }),
+        backup: renderBackupPanel({ omitChrome: true }),
+    });
 }
 
 function buildTabContent(tab) {
+    if (tab.id === 'ledger') return renderPausedStoresBanner('ledger') + renderLedger();
     if (tab.id === 'calendar') return renderCalendarPanel();
     if (tab.id === 'overview') return renderOverviewPane();
     if (tab.id === 'settings') return renderSettingsTab();
@@ -469,7 +291,46 @@ function buildTabContent(tab) {
 let modal = null;
 const _initedModules = new Set();
 
+function wirePausedStoreControls() {
+    if (!modal) return;
+    const pauseRetryBtns = modal.querySelectorAll('[data-mwt-pause-retry]');
+    pauseRetryBtns.forEach((btn) => {
+        btn.onclick = async () => {
+            const storeId = btn.dataset.mwtPauseRetry;
+            setControlBusy(btn, true);
+            const previousLabel = btn.textContent;
+            btn.textContent = 'Retrying…';
+            try {
+                const result = await retryStore(storeId);
+                if (result.ok) {
+                    setStatus(modal, 'Retry succeeded — the store resumed. Re-open this tab to refresh it.', 'success', 6000);
+                } else {
+                    setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
+                }
+            } finally {
+                setControlBusy(btn, false);
+                btn.textContent = previousLabel;
+            }
+        };
+    });
+    const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
+    pauseExportBtns.forEach((btn) => {
+        btn.onclick = async () => {
+            // Await hydration/export before describing the result; keep the
+            // button busy throughout and use the Backup panel's wording owner.
+            setControlBusy(btn, true);
+            try {
+                const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
+                setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
+            } finally {
+                setControlBusy(btn, false);
+            }
+        };
+    });
+}
+
 function renderModal() {
+    const previousMainTab = modal?.querySelector('.mwt-tab-btn[aria-selected="true"]')?.dataset.tab;
     // Accessibility plan §4.2 / Slice 2: the main tab bar follows the WAI-ARIA
     // Tabs pattern — role=tablist/tab/tabpanel, aria-controls/aria-labelledby
     // pairs through stable ids, roving tabindex (inactive tabs -1), hidden on
@@ -504,7 +365,13 @@ function renderModal() {
     // is rebuilt on every open and chat change, so wiring runs on every
     // render; see wireMainTabBar() for why repeated renders can neither drop
     // the handlers nor stack duplicates.
-    wireMainTabBar(modal);
+    const mainTabs = wireMainTabBar(modal);
+    const previousMainIndex = TABS.findIndex(tab => tab.id === previousMainTab);
+    if (previousMainIndex >= 0) mainTabs?.select(previousMainIndex);
+    wireSettingsWorkspace(modal, { onSelect: id => { selectedSettingsSection = id; } });
+    for (const [id, key] of [['show-ledger', 'showFloatLedger'], ['enable-ledger', 'enableLedger'], ['inject-ledger', 'injectLedger']]) {
+        modal.querySelector(`#mwt-s-${id}`).checked = getSettings()[key] !== false;
+    }
 
     // Init feature modules with modal reference and wire their events
     for (const tab of TABS) {
@@ -519,54 +386,30 @@ function renderModal() {
 
     // Wire the Backup/Restore control (lives in the Settings tab). The body is
     // rebuilt on every open, so rebind each render like the module wire-events.
+    wireSettingsConfiguration(modal, { openers: {
+        'world-state': openWorldSettings,
+        chronicle: openChronicleSettings,
+        knowledge: showKnowledgeSettings,
+        'story-planner': openPlannerSettings,
+        interiority: openInterioritySettings,
+    } });
     wireBackupEvents(modal);
     wireAmbientSettings(modal);
     wireCalendarPanel(modal);
+    wireLedger(modal, { getSettings, saveSettings, onChanged: () => {
+        Ledger.refreshInjection('ledger-ui');
+        ui.applyButtonVisibility();
+        ui.updateFloatTokenCounts();
+        // Keep the global Settings form in sync with the immediately saved strip.
+        const settings = getSettings();
+        for (const [id, key] of [['show-ledger', 'showFloatLedger'], ['enable-ledger', 'enableLedger'], ['inject-ledger', 'injectLedger']]) {
+            const control = modal.querySelector(`#mwt-s-${id}`);
+            if (control) control.checked = settings[key] !== false;
+        }
+    } });
 
-    // Part 5 (§5.4): wire the paused-store banner's actions — the module's
-    // OWN tab owns Retry and the recovery export (never the read-only
-    // Diagnostics panel). The body is rebuilt on every open, so rebind here
-    // like the backup control; buttons carry data-mwt-pause-* attributes.
-    const pauseRetryBtns = modal.querySelectorAll('[data-mwt-pause-retry]');
-    pauseRetryBtns.forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            const storeId = btn.dataset.mwtPauseRetry;
-            setControlBusy(btn, true);
-            const previousLabel = btn.textContent;
-            btn.textContent = 'Retrying…';
-            try {
-                const result = await retryStore(storeId);
-                if (result.ok) {
-                    setStatus(modal, `Retry succeeded — the store resumed. Re-open this tab to refresh it.`, 'success', 6000);
-                } else {
-                    setStatus(modal, `Retry did not clear the pause: ${result.message || result.reason || 'the store is still blocked'}`, 'error', 9000);
-                }
-            } finally {
-                setControlBusy(btn, false);
-                btn.textContent = previousLabel;
-            }
-        });
-    });
-    const pauseExportBtns = modal.querySelectorAll('[data-mwt-pause-export]');
-    pauseExportBtns.forEach((btn) => {
-        btn.addEventListener('click', async () => {
-            // The export is async (it hydrates the resolved Knowledge books
-            // first when a chat switch left their loads still in flight), so
-            // await it before describing the result.
-            // One wording owner (backup/render.js describeRecoveryExportResult):
-            // an `unreadable` refusal surfaces its message as an error, never
-            // the "nothing was rejected" info line — same as the Backup panel.
-            // A11Y-S3-03: own the busy pair across the awaited export so the
-            // button can neither double-fire nor lie about being idle.
-            setControlBusy(btn, true);
-            try {
-                const { message, tone } = describeRecoveryExportResult(await exportRecoveryData());
-                setStatus(modal, message, tone, tone === 'info' ? 6000 : (tone === 'error' ? 12000 : 8000));
-            } finally {
-                setControlBusy(btn, false);
-            }
-        });
-    });
+    // Rebind on full renders as well as preset-owned pane replacements.
+    wirePausedStoreControls();
 
     // Wire the Diagnostics panel shell (lives in the 🩺 Diagnostics tab).
     // Same rebind-every-render rule as the backup control above.
@@ -580,68 +423,9 @@ function renderModal() {
     // tools wire their own guarded preview→confirm modals.
     wireOverviewPane(modal);
 
-    // Wire connection profile toggle (hide API fields when a profile is selected)
-    const profileSelect = modal.querySelector('#mwt-s-connection-profile');
-    if (profileSelect) {
-        profileSelect.addEventListener('change', () => {
-            const apiFields = modal.querySelector('#mwt-s-api-fields');
-            if (apiFields) apiFields.style.display = profileSelect.value ? 'none' : '';
-        });
-    }
-
-    // Wire settings save
-    const saveBtn = modal.querySelector('#mwt-s-save');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
-            const apiValues = readApiSettingsValues(modal, GLOBAL_API_FIELD_IDS);
-            // Depth 0 ("inject at the very bottom") is a legitimate value, so
-            // don't use `Number(...) || fallback` — that clobbers 0 to the fallback.
-            const depthOr = (sel, fallback) => {
-                const n = parseInt(modal.querySelector(sel)?.value, 10);
-                return Number.isFinite(n) && n >= 0 ? n : fallback;
-            };
-            const rawRecentHistoryExclude = Number(modal.querySelector('#mwt-s-recent-history-exclude')?.value);
-            const recentHistoryExclude = Number.isFinite(rawRecentHistoryExclude)
-                ? Math.min(10, Math.max(0, Math.round(rawRecentHistoryExclude)))
-                : 2;
-            // Generation coordinator (TODO §1): clamp to the coordinator's
-            // supported range; an empty/garbage field falls back to the default.
-            const rawApiMaxConcurrent = Number(modal.querySelector('#mwt-s-api-max-concurrent')?.value);
-            const apiMaxConcurrent = Number.isFinite(rawApiMaxConcurrent)
-                ? Math.min(8, Math.max(1, Math.round(rawApiMaxConcurrent)))
-                : 2;
-            const patch = {
-                ...apiValues,
-                connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
-                recentHistoryExclude,
-                apiMaxConcurrent,
-                pauseBackgroundJobsDuringGeneration: modal.querySelector('#mwt-s-pause-background')?.checked ?? false,
-                // Per-module injection settings
-                worldStateDepth: depthOr('#mwt-s-ws-depth', 4),
-                worldStateRole: modal.querySelector('#mwt-s-ws-role')?.value || 'system',
-                chronicleDepth: depthOr('#mwt-s-ch-depth', 4),
-                chronicleRole: modal.querySelector('#mwt-s-ch-role')?.value || 'system',
-                // Structural boundaries
-                structuralBoundaries: modal.querySelector('#mwt-s-structural-boundaries')?.checked ?? true,
-                // Button visibility
-                showFloatWorld: modal.querySelector('#mwt-s-show-world')?.checked ?? true,
-                showFloatChronicle: modal.querySelector('#mwt-s-show-chronicle')?.checked ?? true,
-                showFloatKnowledge: modal.querySelector('#mwt-s-show-knowledge')?.checked ?? true,
-                showFloatStoryPlanner: modal.querySelector('#mwt-s-show-story-planner')?.checked ?? true,
-                showFloatInteriority: modal.querySelector('#mwt-s-show-interiority')?.checked ?? true,
-                showFloatSettings: modal.querySelector('#mwt-s-show-settings')?.checked ?? true,
-                collapseFloatButtons: modal.querySelector('#mwt-s-collapse-float')?.checked ?? false,
-                buttonStyle: modal.querySelector('#mwt-s-button-style')?.value || 'modern',
-                // Per-tracker enable + master panic switch
-                enableWorldState: modal.querySelector('#mwt-s-enable-world')?.checked ?? true,
-                enableChronicle: modal.querySelector('#mwt-s-enable-chronicle')?.checked ?? true,
-                enableKnowledge: modal.querySelector('#mwt-s-enable-knowledge')?.checked ?? true,
-                enableStoryPlanner: modal.querySelector('#mwt-s-enable-story-planner')?.checked ?? true,
-                enableInteriority: modal.querySelector('#mwt-s-enable-interiority')?.checked ?? true,
-                interiorityDepth: depthOr('#mwt-s-int-depth', 1),
-                interiorityRole: modal.querySelector('#mwt-s-int-role')?.value || 'system',
-                injectionMasterOff: modal.querySelector('#mwt-s-master-off')?.checked ?? false,
-            };
+    wireGlobalSettingsForm(modal, {
+        onRunSetup: () => openOnboarding({ beforeApply: confirmPresetApply, onApplied: refreshPresetControls }),
+        onSave: (patch) => {
             // NOTE: enableX and showFloatX are deliberately decoupled. Toggling
             // "Use this tracker" here only flips enableX (button stays visible
             // with a red ✕), matching the right-click quick-toggle behavior.
@@ -650,6 +434,10 @@ function renderModal() {
             // that the previous one-way coupling created.
 
             saveSettings(patch);
+            modal.querySelectorAll('[data-ledger-setting]').forEach(control => {
+                control.checked = control.dataset.ledgerSetting === 'ledgerProposals'
+                    ? getSettings().ledgerProposals === true : getSettings()[control.dataset.ledgerSetting] !== false;
+            });
             ui.applyButtonVisibility();
             ui.applyButtonStyle();
             ui.updateButtonStates();
@@ -664,39 +452,25 @@ function renderModal() {
                 Chronicle.applyInjection?.();
                 StoryPlanner.applyPlanInjection?.();
                 Interiority.applyIntentionsInjection?.();
+                Ledger.refreshInjection('settings-saved');
                 if (getSettings().injectionMasterOff) clearAmbientInjection({ kind: 'ambient-conditions', clearReason: 'panic-settings-save' });
                 if (getSettings().injectionMasterOff) clearCalendarInjection({ clearReason: 'panic-settings-save' });
             } catch { /* modules may not be initialized yet */ }
             setStatus(modal, 'Settings saved.', 'success', 3000);
-        });
-    }
-
-    // Wire reset-floating-button-positions button
-    const resetBtn = modal.querySelector('#mwt-s-reset-float-positions');
-    if (resetBtn) {
-        resetBtn.addEventListener('click', () => {
+        },
+        onResetPositions: () => {
             ui.resetFloatPositions();
             setStatus(modal, 'Floating buttons reset to default positions.', 'success', 3000);
-        });
-    }
-
-    // Wire sync-to-modules button
-    const syncBtn = modal.querySelector('#mwt-s-sync');
-    if (syncBtn) {
-        syncBtn.addEventListener('click', () => {
-            const apiValues = readApiSettingsValues(modal, GLOBAL_API_FIELD_IDS);
-            const patch = {
-                connectionProfileId: modal.querySelector('#mwt-s-connection-profile')?.value || '',
-                ...apiValues,
-            };
+        },
+        onSync: (patch) => {
             if (WorldState.syncGlobalSettings) WorldState.syncGlobalSettings(patch);
             if (Chronicle.syncGlobalSettings) Chronicle.syncGlobalSettings(patch);
             if (Knowledge.syncGlobalSettings) Knowledge.syncGlobalSettings(patch);
             if (StoryPlanner.syncGlobalSettings) StoryPlanner.syncGlobalSettings(patch);
             if (Interiority.syncGlobalSettings) Interiority.syncGlobalSettings(patch);
             setStatus(modal, 'API settings synced to all modules.', 'success', 3000);
-        });
-    }
+        },
+    });
 }
 
 // ─── Open modal helper (shared by button bar, wand menu, drawer) ────────────
@@ -711,11 +485,12 @@ function openMwtModal(tabId) {
         const tabBtn = modal?.querySelector(`.mwt-tab-btn[data-tab="${tabId}"]`);
         if (tabBtn) tabBtn.click();
     }
+    onboardingStartup.retry();
 }
 
 // ─── Shared module registry (used by the message-event routers below) ───────
 
-const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar };
+const modules = { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar, Ledger };
 
 // Part 6 (§5.4/§7.5): the out-of-band resume seam. When a paused store
 // resumes through Retry or the privileged §7.5 preparation — long after
@@ -733,6 +508,7 @@ const MODULE_BY_MODULE_ID = Object.freeze({
     knowledge: Knowledge,
     story_planner: StoryPlanner,
     interiority: Interiority,
+    ledger: Ledger,
 });
 for (const [resumeStoreId, resumeModuleId] of Object.entries(STORE_MODULE_IDS)) {
     const resumeModule = MODULE_BY_MODULE_ID[resumeModuleId];
@@ -811,7 +587,7 @@ if (eventSource && event_types?.CHAT_CHANGED) {
                 const restored = focusId
                     ? [...modal.querySelectorAll('[id]')].find(el => el.id === focusId)
                     : (focusTab ? modal.querySelector(`.mwt-tab-btn[data-tab="${focusTab}"]`) : null);
-                (restored || modal.querySelector('.mwt-modal-close'))?.focus?.();
+                restoreSettingsFocus(modal, restored);
             }
         }
     });
@@ -961,6 +737,7 @@ const ui = createFloatingButtonBar({
 
 const commands = createCommands({
     registerSlashCommand,
+    registerRawSlashCommand,
     macroRegistry,
     modules,
     resetFloatPositions: ui.resetFloatPositions,
@@ -995,10 +772,45 @@ Chronicle.init(null);
 Knowledge.init(null);
 StoryPlanner.init(null);
 Interiority.init(null);
+Ledger.init();
+
+// After module reads/migrations, before MWT has ever been opened by the user.
+const onboardingStartup = registerOnboardingStartup({ eventSource, eventTypes: event_types, beforeApply: confirmPresetApply, onApplied: refreshPresetControls });
+
+function confirmPresetApply() {
+    return !WorldState.isWorldStateDirty?.()
+        || confirm('You have unsaved changes to the World State. Applying a preset will discard them. Apply anyway?');
+}
+
+function refreshPresetControls() {
+    ui.updateButtonStates();
+    // Refresh preset-owned module forms; preserve unrelated global drafts
+    // and the Run setup opener (the modal helper restores keyboard focus to it).
+    const settings = getSettings();
+    for (const [field, key] of [
+        ['world', 'enableWorldState'], ['chronicle', 'enableChronicle'],
+        ['knowledge', 'enableKnowledge'], ['story-planner', 'enableStoryPlanner'],
+        ['interiority', 'enableInteriority'],
+    ]) {
+        const control = document.querySelector(`#mwt-s-enable-${field}`);
+        if (control) control.checked = settings[key] !== false;
+    }
+    refreshPresetPanes(modal, TABS, buildTabContent);
+    wirePausedStoreControls();
+    WorldState.applyWorldStateInjection?.();
+    Chronicle.applyInjection?.();
+    StoryPlanner.applyPlanInjection?.();
+    Interiority.applyIntentionsInjection?.();
+}
 
 // Periodically update floating button token counts and auto-refresh countdown
 setInterval(ui.updateFloatTokenCounts, 5000);
 setTimeout(ui.updateFloatTokenCounts, 2000);
+
+// Bring Knowledge's Restore history down to its per-NPC cap and storage
+// budget once per page load. It only rewrites kt_history_* keys and needs no
+// chat or lorebook state; the delay keeps it out of the way of startup.
+setTimeout(Knowledge.compactStoredHistories, 10_000);
 
 // Listen for busy-state changes from any module (decoupled via CustomEvent)
 document.addEventListener('mwt:busy-changed', ui.updateButtonStates);
@@ -1969,8 +1781,10 @@ window.MWT.diagnostics = {
     // the 🗂️ Scope & storage sub-tab renders — resolved identity + epoch,
     // which lorebooks this chat resolves to and WHY (re-derived read-only:
     // calling this never saves a binding), per-book hydration + store
-    // version, saved bindings, and every scope_fallback_global warn Phase 3
-    // recorded this session. Synchronous; read-only; resolves live per call.
+    // version, saved bindings, every scope_fallback_global warn Phase 3
+    // recorded this session, and the storage meter (localStorage by key
+    // family + this chat's MWT metadata sizes). Synchronous; read-only;
+    // resolves live per call.
     // MWT.scope.diagnose() remains the deeper dump (raw context fields); this
     // is the pasteable one-table answer.
     scope: () => {
@@ -2025,6 +1839,20 @@ window.MWT.diagnostics = {
                 profiles: row.profiles,
             })));
             console.log('[MWT] "key" is the stable identity (avatar filename), which is why renaming a card keeps its books.');
+        }
+        // Storage meter — sizes by key family only, never a key name or value.
+        const local = snap.storage?.local;
+        if (local?.available) {
+            if (local.warning) console.warn(`[MWT] ⚠ [storage-near-full] ${local.warning}`);
+            console.log(`[MWT] Browser storage: ${local.totalChars.toLocaleString()} of ≈${local.approxQuotaChars.toLocaleString()} characters used (approximate limit); MWT's share ${local.mwtChars.toLocaleString()}.`);
+            console.table(local.families.map((f) => ({ family: f.label, keys: f.keys, chars: f.chars })));
+        } else if (local) {
+            console.log(`[MWT] Browser storage: ${local.note}`);
+        }
+        const chatMeta = snap.storage?.chatMetadata;
+        if (chatMeta?.available) {
+            console.table(chatMeta.rows.map((row) => ({ store: row.id, key: row.key, chars: row.present ? row.chars : 'absent' })));
+            console.log('[MWT] Chat metadata is saved in the chat file on the server, not in browser storage, so it does not count toward the browser limit.');
         }
         console.log(
             '[MWT] Scope & storage snapshot for MWT v' + snap.mwtVersion + ' — read-only, re-derived live; nothing was ' +

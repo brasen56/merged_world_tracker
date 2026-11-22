@@ -16,6 +16,25 @@ import { getChat } from '../core/index.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
 import { ensureRegistryIdentityFields } from './schema.js';
+import { repairGrowthDossier, GROWTH_DOSSIER_DEFAULT_LIMITS } from './growth_dossier_state.js';
+
+export function getGrowthDossierSettings(name) {
+    const value = repairGrowthDossier(getRegistryEntry(name)?.info?.growthDossier) || {};
+    return { ...value, limits: { ...GROWTH_DOSSIER_DEFAULT_LIMITS, ...value.limits } };
+}
+
+/** Patch only this NPC's settings, retaining identity and all sibling fields. */
+export function setGrowthDossierSettings(name, patch) {
+    const match = getRegistryEntry(name);
+    if (!match) throw new Error(`Unknown NPC: ${name}`);
+    const previous = match.info.growthDossier || {};
+    const value = repairGrowthDossier({ ...previous, ...patch,
+        limits: { ...previous.limits, ...patch.limits } });
+    if (!value) throw new Error('Invalid Growth dossier settings');
+    const reg = getRegistry();
+    reg[match.key] = { ...match.info, growthDossier: value };
+    saveRegistry(reg);
+}
 
 // ─── NPC Registry ────────────────────────────────────────────────────────────
 

@@ -81,9 +81,17 @@ export const FIELD_CONTRACT = Object.freeze([
         notBelongs: 'an interaction log, relationship milestones, or what the player did and felt',
         shape: '1-2 short sentences',
     }),
+    // Agenda used to be an "active overarching goal" and the scan templates
+    // asked for "their main agenda in the story right now", which produced
+    // task lists: an exam date next to a deal that had already closed. It now
+    // holds the want behind the tasks. Interiority's intentions call reads this
+    // field, so intentions become moves toward the want. Keep the label: it is
+    // how existing entries are parsed back.
     Object.freeze({
         key: 'agenda', label: 'Current Agenda', maxChars: 400,
-        belongs: 'active overarching goal and meaningful constraint', notBelongs: 'every small task or completed obligation', shape: '1-2 short sentences',
+        belongs: 'the one situation they most want to achieve or protect, as the story and their choices show it, and what stands in its way',
+        notBelongs: 'a task, exam, or schedule unless the want hinges on it; steps toward it; a goal already reached or dropped (its outcome goes in the ledger); a list',
+        shape: '1-2 short sentences: the want, then the obstacle',
     }),
     Object.freeze({
         key: 'secrets', label: 'Secrets', maxChars: 1200, structured: true,
@@ -135,7 +143,7 @@ export function structuralRejection(text) {
     if (/[\r\n\u2028\u2029]/.test(text)) return 'contains a line break (entry values are single-line)';
     const lower = text.toLowerCase();
     if (lower.includes('knowledge ledger:')) return 'contains a "Knowledge Ledger:" heading (section injection)';
-    if (lower.includes('<!-- mwt:relationships:')) return 'contains a managed relationship block marker';
+    if (/<!--\s*mwt:relationships:/i.test(text)) return 'contains a managed relationship block marker';
     if (lower.includes('[dossier]')) return 'contains the [Dossier] header marker (section injection)';
     return null;
 }
@@ -191,14 +199,16 @@ export function scanContractRejections(newItems, added) {
  *
  * @param {string} key field key; non-contract keys pass through untouched
  * @param {*} value model-supplied value
+ * @param {object} [options] explicit per-call ceilings; default scan bounds never change
  * @returns {{ok: true, value: *}|{ok: false, reason: string}}
  *   ok+null means "no value supplied" (callers treat null as no-change).
  *   Rejections carry a field-specific reason for surfacing; values are never
  *   sliced — the caller drops them and keeps the previous state.
  */
-export function validateFieldValue(key, value) {
+export function validateFieldValue(key, value, { ceilings = {} } = {}) {
     const def = FIELD_CONTRACT_BY_KEY[key];
     if (!def) return { ok: true, value };
+    const maxChars = Number.isInteger(ceilings[key]) && ceilings[key] > 0 ? ceilings[key] : def.maxChars;
     if (value === undefined || value === null || value === '') return { ok: true, value: null };
 
     if (typeof value === 'number' || typeof value === 'boolean') value = String(value);
@@ -208,8 +218,8 @@ export function validateFieldValue(key, value) {
             return { ok: false, reason: 'value is not a string (structured values are only allowed for secrets/canon_lock)' };
         }
         const preview = previewStructured(value);
-        if (preview.length > def.maxChars) {
-            return { ok: false, reason: `structured value coerces to ${preview.length} characters (max ${def.maxChars})` };
+        if (preview.length > maxChars) {
+            return { ok: false, reason: `structured value coerces to ${preview.length} characters (max ${maxChars})` };
         }
         const reason = structuralRejection(preview);
         if (reason) return { ok: false, reason };
@@ -221,8 +231,8 @@ export function validateFieldValue(key, value) {
     if (trimmed === '') return { ok: true, value: null };
     const reason = structuralRejection(trimmed);
     if (reason) return { ok: false, reason };
-    if (trimmed.length > def.maxChars) {
-        return { ok: false, reason: `${trimmed.length} characters exceeds the ${def.maxChars}-character bound` };
+    if (trimmed.length > maxChars) {
+        return { ok: false, reason: `${trimmed.length} characters exceeds the ${maxChars}-character bound` };
     }
     return { ok: true, value: trimmed };
 }
@@ -235,9 +245,10 @@ export function validateFieldValue(key, value) {
  * change beyond this contract.
  *
  * @param {object} fields
+ * @param {object} [options] passed to validateFieldValue (Growth-only callers opt in)
  * @returns {{fields: object, rejected: Array<{key: string, reason: string}>}}
  */
-export function validateFields(fields) {
+export function validateFields(fields, options = {}) {
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
         return { fields: {}, rejected: [] };
     }
@@ -245,7 +256,7 @@ export function validateFields(fields) {
     const rejected = [];
     for (const def of FIELD_CONTRACT) {
         if (!Object.prototype.hasOwnProperty.call(fields, def.key)) continue;
-        const check = validateFieldValue(def.key, fields[def.key]);
+        const check = validateFieldValue(def.key, fields[def.key], options);
         if (!check.ok) {
             out[def.key] = null;
             rejected.push({ key: def.key, reason: check.reason });
@@ -365,22 +376,29 @@ export function validateScanRecord(data) {
  *
  * @param {object} [opts]
  * @param {'compact'|'dossier'} [opts.mode]
+ * @param {'null'|'echo'} [opts.unchanged] cleanup requires exact stored strings, not null
  * @returns {string}
  */
-export function contractPromptBlock({ mode = 'dossier' } = {}) {
+export function contractPromptBlock({ mode = 'dossier', unchanged = 'null' } = {}) {
     const keys = mode === 'compact'
-        ? ['tone', 'perceived_as', 'descriptor', 'first_seen']
+        ? ['tone', 'perceived_as', 'descriptor', 'first_seen', 'personality', 'voice']
         : FIELD_CONTRACT.map(def => def.key);
     const lines = [
         'FIELD CONTRACT (applies to every field you output):',
-        "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
+        unchanged === 'echo'
+            ? '- Rewrite only when a supported concise version preserves the established meaning; otherwise echo the exact original stored string, even if it exceeds the usual shape or size bound. Every selected value must be a string; never output null.'
+            : "- Update a field only when there is a MEANINGFUL change in that field's subject; otherwise output null.",
         "- Give the field's CURRENT CONCISE VALUE, not its old value plus a new event clause — fields are compact references, not event logs.",
-        '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
+        // Cleanup must not be told an echo is invalid: it is the safe answer.
+        unchanged === 'echo'
+            ? "- A rewrite must fit the field's shape and its character limit below; a rewrite over the limit is refused. If no supported rewrite fits, echo the original instead of a partial trim."
+            : '- A value that overshoots its shape — an event log, an interaction log, a transcript, a wall of appended clauses — is invalid however factual it is: if it does not fit the shape, it does not belong in the field.',
         '- Preserve an unknown, missing, or empty value rather than inventing detail the established facts do not support.',
     ];
     for (const key of keys) {
         const def = FIELD_CONTRACT_BY_KEY[key];
-        lines.push(`- ${def.label}: ${def.belongs} (${def.shape}). Not: ${def.notBelongs}.`);
+        const limit = unchanged === 'echo' ? ` Max ${def.maxChars} characters.` : '';
+        lines.push(`- ${def.label}: ${def.belongs} (${def.shape}). Not: ${def.notBelongs}.${limit}`);
     }
     lines.push('- Knowledge ledger items are durable takeaways — what was established, from what source, on what date — not retellings of the scene.');
     return lines.join('\n');

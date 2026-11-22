@@ -12,6 +12,483 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [2.20.0]
+
+### Added
+
+- **Ledger changes — reviewed suggestions, debts and inventory history.** Opt-in **Suggest ledger changes from World State refresh** gathers evidence-backed money and item suggestions alongside refreshes, without another API call. Review the evidence and accept or reject individually or by refresh; nothing changes balances or inventory until you accept. Suggestions remain off by default, and local models may struggle with the additional report format.
+  - **Review safeguards:** source-changed suggestions require confirmation, new-item suggestions can be applied to an existing item, and overdrafts ask how to handle the shortfall rather than silently recording it.
+  - **Debts:** mark transactions as loans or repayments with a counterparty to track who owes whom, separately from ordinary purchases. Open debts reach narrator context, and carried-forward transactions preserve outstanding loans.
+  - **Inventory:** pin important carried items for narrator context, record where stored possessions are kept, and review per-item history or recent changes with source details for accepted suggestions. Stored items remain excluded from narrator injection.
+- **Ledger context for Story Planner.** Story Planner now receives a bounded, read-only Ledger block with exact balances, open debts, carried items and stored possessions with locations and short notes. Stored items are explicitly not on hand. Full/custom, scoped and targeted prompts share the projection; a default-on **Include ledger** setting controls it independently of private author context and narrator injection.
+- **`/wt-ledger-add <amount> [currency] [note]` and `/wt-item <name> [qty]`.** Explicit user commands use the existing validated save, transaction-fold and item-audit path. Quoted multi-word names are supported; ambiguous names and invalid/unsafe numbers refuse without edits. Item additions preserve an existing item's storage status. Disabled, paused, invalid and future Ledgers remain protected.
+
+## [2.19.0]
+
+### Added
+
+- **First-run setup — a one-click Lite / Standard / Full dialog.** Fresh
+  installs see the three SETUP_GUIDE starting points as one choice in a
+  single accessible modal: **Lite** (World State + Chronicle, minimal
+  detail, nothing automatic), **Standard** (all five modules, no
+  background work), or **Full** (all five plus auto-refresh,
+  auto-snapshots, auto-scans and auto-thoughts).
+  - Applying writes only module enables, automatic cadences and the World
+    State Detail Level, through each store's own settings manager.
+    Unrelated settings and per-chat overrides are preserved, nothing is
+    generated, and one Diagnostics event records the level applied;
+    re-running a preset or switching levels later is safe.
+  - The dialog appears at most once per install and only while all six
+    settings stores are empty — upgraders, and anyone who saved settings
+    first, never see it. **Decide later** closes it without nagging, and
+    a host popup at page load defers it to the next MWT open.
+  - **Settings → Modules & Configuration → Run setup…** reopens the same
+    dialog at any time, bypassing fresh-install detection.
+- **Knowledge — reviewed cleanup of stored dossier fields.** The NPC
+  Fields picker gains **Review field cleanup…**: select specific stored
+  fields (Role, Appearance, Voice, Background, and the other single-line
+  dossier values) and the configured Knowledge model proposes concise
+  rewrites of what is already stored — an entry-only pass, not a refresh
+  from recent messages. The ledger and unselected text are never touched.
+  - Nothing is selected or applied by default. Before the one paid
+    request, the dialog discloses the resolved connection and exactly
+    what is sent — the NPC name and the selected stored values only; no
+    chat text, ledger, unrelated fields or recovery originals — plus the
+    estimated input size and output allowance.
+  - Each proposal shows the original, the rewrite, why, which details it
+    would displace, and any ambiguity. Every field needs an explicit
+    Keep / Accept / Edit decision; ambiguous proposals cannot be accepted,
+    edits are revalidated, and malformed or truncated model output is
+    refused rather than repaired.
+  - Apply first saves a verified recovery original, and Cleanup recovery
+    can restore the touched fields after a close or reload while newer
+    ledger and unselected-field edits survive. Canon Lock, Secrets, Image
+    Tags, header identity and Growth-owned fields are excluded, and
+    unapplied reviews are session-only but exportable.
+- **Settings — module configuration shortcuts.** **Modules & Configuration**
+  now has **Configure** actions for World State, Chronicle, Knowledge, Story
+  Planner, Interiority, and Ledger. Each opens and focuses the module's own
+  settings or control strip, rather than just switching tabs. Shortcuts work
+  while trackers are disabled without enabling them, and opening an already-open
+  target leaves it open. Ambient and Calendar links lead to their existing
+  per-chat controls; detailed configuration still uses each owner's save actions.
+
+### Changed
+
+- **Settings — a sectioned workspace instead of a long stack of disclosures.**
+  The existing **⚙️ Settings** tab now groups controls into **API & Connection**,
+  **Automation**, **Injection**, **Modules & Configuration**, **Floating Buttons**,
+  **Ambient Conditions — This chat**, and **Backup & Restore — This chat**.
+  - Desktop uses keyboard-navigable vertical tabs; narrow screens use a
+    synchronized section picker. Switching sections keeps unsaved field values
+    intact and does not save anything. The selected section is remembered for
+    the session; reopening the modal or switching chats reloads saved values,
+    not unsaved drafts.
+  - **Save Global Settings** explicitly saves all global sections, including
+    hidden fields, but not Ambient drafts, module forms, Calendar, Budget, or
+    backups. Ambient keeps its own Save and immediate actions; Backup keeps its
+    existing export, restore, undo, and recovery workflow.
+  - **Sync** remains in API & Connection and copies the current API inputs,
+    including unsaved changes, to the five LLM modules without saving the global
+    form. Overview's Coordinator and Ambient links now reveal the owning section
+    before scrolling to their controls.
+  - Settings ownership, storage, API precedence, and generation behavior are
+    unchanged; no settings migration or new configuration keys are required.
+
+### Fixed
+
+- **Knowledge — From Lorebooks repairs now survive an immediate reload.** NPC
+  reconciliation and State Tracker adoption wait for their registry stores to
+  reach disk before reporting success, instead of relying on a pending 1.2-second
+  save timer. Reconciliation loads the saved registry before repairing it,
+  preserving identity IDs, aliases, and profile links; unreadable stores and
+  failed saves are reported as errors rather than successful repairs.
+- **Settings — empty numeric fields use their defaults.** Clearing **Messages
+  to defer** or **Max parallel API calls** and saving now stores the default of
+  **2** for either field, instead of 0 and 1 respectively. Explicit values still
+  use the existing limits (0–10 and 1–8).
+
+## [2.18.1]
+
+### Changed
+
+- **Knowledge — Restore history takes far less browser storage.** Restore
+  only ever uses the newest saved version that differs from the entry, yet
+  each NPC kept up to 50 full copies in browser storage, which is shared
+  with SillyTavern and every other extension. One long campaign measured
+  4.8 million of the browser's roughly 5.2 million characters in Restore
+  history alone.
+  - Each NPC now keeps its **10 most recent versions**. Histories saved by
+    earlier versions are cut down once per page load, about 10 seconds
+    after startup, rather than waiting for each NPC's next save. Repeats of
+    a version a newer copy already holds go first, so the 10 kept are
+    distinct.
+  - Restore history now stays under a **3,000,000-character budget**,
+    leaving the rest of the browser's storage free for SillyTavern and
+    other extensions. Past it, the oldest versions of the largest
+    histories go first and every NPC keeps at least two. This happens
+    quietly because Restore keeps working; Diagnostics logs it. The
+    existing "browser storage is full" trim and its warning still apply if
+    other data fills the browser anyway.
+  - NPC import now stores carried history the same way: invalid records
+    are dropped, older exports are cut to 10 versions, and a full browser
+    makes room instead of silently losing the history.
+  - **Diagnostics → 🗂️ Scope & storage** shows Restore history against
+    its budget and the 10-version limit.
+  - Lorebook entries are never touched by any of this.
+
+## [2.18.0]
+
+### Added
+
+- **💰 Ledger — a persistent purse and inventory for the player character.**
+  The new Ledger tab has **Finances** and **Inventory** sub-tabs: you enter
+  what changes, code does the arithmetic, and the narrator only reads the
+  result. No model calls, automatic deductions or purchases inferred from
+  prose, and no changes to World State's scene-focused item tracking.
+  - **Finances:** define multiple currencies with their own decimal places,
+    record money received or spent with a note and optional story date, and
+    edit or delete transactions with confirmation before deletion. Balances
+    are computed from the history using exact smallest-unit arithmetic;
+    currencies stay separate, with no exchange-rate conversion. Beyond 200
+    transactions, the oldest entries fold into editable **Carried forward**
+    entries without changing the balances.
+  - **Inventory:** track names, quantities and notes, marking each item
+    **Carried** or **Stored**. Quantity steppers and direct edits share the
+    same validation; deleting an item, including setting its quantity to
+    zero, asks for confirmation.
+  - **Narrator context:** injects exact currency balances, including zero
+    and debt, and up to 15 carried item rows, with an omitted-item count
+    when more are carried. Stored items, notes and transaction history stay
+    out of the prompt. The money is authoritative; unlisted possessions
+    are not treated as missing. Context refreshes on edits and chat changes,
+    and respects the module, injection and panic-switch gates.
+  - **At a glance:** a floating 💰 button in both button styles shows the
+    chosen currency's compact balance; its tooltip lists all balances and
+    the carried-item count. The Overview links to the Ledger, and Settings
+    controls its visibility, enablement and injection independently.
+  - **Per-chat storage and recovery:** participates in schema validation,
+    Diagnostics, token budgeting, backup, restore and Undo Last Restore.
+    Restores replace the whole Ledger rather than merging transactions;
+    older backups that did not cover it leave the current Ledger alone.
+    Invalid or newer-version data is kept unchanged, and stale panels
+    refuse saves rather than writing into another chat or overwriting
+    externally changed records.
+
+## [2.17.4]
+
+### Changed
+
+- **Interiority — much smaller chat files on long chats.** Every message
+  with thoughts used to save a full copy of the intention lifecycle history
+  so a swipe, edit or delete could undo that turn. Once the history reached
+  its 150-record limit each copy was about 68,000 characters, so a chat with
+  40 such messages carried roughly 2.7 million characters of copies. Each
+  message now saves a short marker of where the history ended instead, and
+  rollback removes what was written after it. Copies saved by earlier
+  versions shrink the next time Interiority generates in that chat.
+  - Rolling back no longer brings back old records that the 150-record limit
+    pushed out during the undone turn, and no longer restores a history you
+    cleared after that turn.
+  - An older MWT version opening a chat saved by this one skips the lifecycle
+    part of a rollback (the undone turn's records stay in the history).
+
+## [2.17.3]
+
+### Fixed
+
+- **Backup — the custom calendar and Ambient Conditions are now backed up
+  and restored.** Both live in the chat's metadata (`mwt_calendar`,
+  `mwt_ambient`) but were never registered with the unified backup, so a
+  backup and restore silently lost a hand-authored calendar and reset the
+  Ambient seed, which changes the chat's weather history. They now ride
+  every backup as their own sections and restore as whole records: the
+  backup's record replaces the current one by default, and the restore
+  preview gains **📅 Calendar** and **🌦️ Ambient** options to keep the
+  current one instead. When the chat's identity can't be verified, an
+  existing record is kept, as World State is. Undo Last Restore puts both
+  back too.
+  - **Older backups still restore, and leave your current calendar and
+    Ambient settings alone.** A backup made before this fix has no such
+    sections, and that now means "not covered", not "remove": even an exact
+    (replace) restore keeps them and says so in the preview. Backups now
+    record which stores they cover, so an exact restore of a new backup
+    still removes a calendar the source chat didn't have.
+  - **Both stores join the schema checks** (registry, load gate,
+    🩺 Diagnostics integrity and Scope & storage). The first open after
+    updating stamps them at version 1 without changing them. The calendar is
+    checked by the same rules the Calendar tab saves with
+    (`validateCalendarRecord`); a calendar that fails them is kept as-is
+    and reported, never quarantined, matching how the Overview already shows
+    "invalid calendar". Ambient is checked only for an unreadable record and
+    a non-number seed (reported, not removed), since the module already
+    reads every field tolerantly.
+  (`calendar/schema.js`, `ambient/schema.js`, `schema/registry.js`,
+  `backup/data.js`, `backup/restore.js`, `backup/index.js`,
+  `backup/render.js`; tests in `test/backup_calendar_ambient.test.js` and
+  `test/schema_runtime_gate.test.js`.)
+- **Diagnostics — the storage meter no longer lists Calendar and Ambient
+  Conditions twice.** The meter was written while both keys lived outside
+  the schema registry and hardcoded them as unregistered rows; the backup
+  fix above registered them, and once both changes were merged each got two
+  rows in the Scope & storage chat-metadata table — one that always read
+  absent/0 and one holding the real size. A key the registry covers is now
+  measured through its registry row only (the hardcoded entries remain as a
+  fallback should a key ever leave the registry). Totals were never
+  double-counted — only the duplicated rows were wrong.
+  (`diagnostics_panel/scope_storage.js`; the row-list test in
+  `test/scope_storage_tab.test.js`.)
+
+### Added
+
+- **Diagnostics — a storage meter on the 🗂️ Scope & storage tab.** The tab
+  now shows how full the browser's storage (localStorage) is for this site,
+  against an approximate limit of about 5,000,000 characters (browsers do
+  not report the real one), and how much of it is MWT's, grouped by key
+  family: Knowledge Restore history, settings fallback copies, floating
+  button positions, and settings left by the pre-merge extensions.
+  Everything else is one "other" row. Below it, each MWT store in the
+  current chat's metadata shows its saved size, with a note that chat
+  metadata lives in the chat file on the server and does not count toward
+  the browser limit. The bar turns amber at 90%. Nothing here changed
+  how storage is used: Knowledge already trims old Restore versions when
+  storage fills, and the meter only makes the level visible, which used to
+  take a console snippet. The tab stays read-only, and Copy Report carries
+  the sizes and family names only, never stored values or key names.
+
+## [2.17.2]
+
+### Changed
+
+- **Knowledge — Growth profiles describe the character as they are now,
+  instead of blending early and current behavior into one conflicted
+  personality.** A profile used to update an NPC's dossier could carry
+  pre-growth traits into the next scene, because both model calls behind
+  it were time-blind: evidence reached the prompts in capture order with
+  no timestamps, and once Catch Up or Backfill recovers old scenes after
+  continuous capture, capture order puts the oldest behavior at the end
+  of the list — where a model reads it as the most recent. The profile
+  prompt even leaned into it, asking for contradiction and tension. A new
+  pure read-time view now ranks each NPC's evidence by message time into
+  positions 0–100 with *early*/*middle*/*late* labels — ranks on distinct
+  message timestamps, never real dates or elapsed time, so a two-month
+  hiatus doesn't squash history into "early" — and all four Growth model
+  calls format from it: Consolidate, Generate Profile, Psychoanalyze and
+  the v2.17.0 Personality/Voice draft, sharing one position domain so the
+  numbers agree between them at the same store state. The fix is
+  read-time only: nothing is written back to the evidence store, there is
+  no migration, and already-consolidated evidence produces better
+  profiles with no extra steps — the 📝 Generate Profile flow and its
+  no-recapture regenerate are unchanged.
+  (`knowledge/growth_timeline.js`, consumed by `knowledge/growth.js` and
+  `knowledge/growth_dossier.js`, with the rewritten prompts in
+  `knowledge/prompts.js`; designed in
+  `docs/GROWTH_PROFILE_TIME_ORDER_SCOPE.md`.)
+  - **Change inside a single claim is visible again.** Every consolidated
+    claim with two or more distinct source messages carries a bounded,
+    ordered sample of its source claims — the two earliest and the two
+    latest — so "waits for permission" then "takes initiative" hiding
+    inside one blended claim is spelled out; crossing a phase boundary is
+    not required, and equal positions never imply an order between
+    messages. The sample budget is a share of the sample-free evidence
+    text (25% by default, floor 8,000 characters), spent first on claims
+    that reach the late phase, and selection is deterministic — the same
+    evidence produces the same prompt every time.
+  - **The prompts were rewritten for chronology.** The profile prompt asks
+    for the character as they are in the latest part of the story: a
+    behavior seen earlier and replaced later is change, not contradiction
+    (inside a single phase too); earlier behavior appears only when it
+    explains the present and late evidence shows it recurring in that
+    situation; a real tension needs both sides present in late evidence;
+    one recent source message is a reaction, not a new default; and if
+    nothing changed, the profile says so and invents no arc. The
+    consolidation prompt must not merge observations that show a behavior
+    changing — the earlier and later behavior become separate claims —
+    and its 40–60% reduction target explicitly yields to that rule.
+    Psychoanalyze's "recent behavioral observations" wording, which had
+    not been true since backfill existed, is fixed.
+  - **Support means distinct source messages.** Several observations
+    captured from one message are one moment of evidence, never repeated
+    support. Each claim shows its first and last position, its phase
+    spread, its count of distinct source messages, and its earliest and
+    latest quotes.
+  - **The Personality/Voice draft sees the same ordered view** through a
+    split projection: the model gets positions, phases and id-less
+    samples, but no timestamps, quotes or receipts; samples carry no
+    citable ids (a draft citing the parent claim still passes
+    validation), and the echo check behaves exactly as before.
+  - **Order unknown is stated, not guessed.** When the timestamps cannot
+    separate the evidence — fewer than three distinct timestamps, or one
+    holding more than a quarter of the dated observations, as with
+    imported chats or coarse host dates — positions and phases are
+    omitted, the evidence is labeled "order unknown", and the prompts say
+    not to infer change from list order. Unverified captures and missing
+    or fallback timestamps never enter positions, spans or support
+    counts; they are listed last, marked as such. New captures now
+    record where their timestamp came from and the verified message's
+    identity so this detection sharpens over time; restored ILS
+    originals are never written.
+  - **Cost and unchanged surfaces.** No new model calls, settings or UI:
+    the same four calls run with reordered, annotated input, which
+    measured +51% Generate input on the largest real store and +73% on a
+    fully consolidated one (the Personality/Voice draft grows a little
+    more). The evidence list UI, the "Generated from N observations"
+    count and the underlying `getEvidenceForProfile` read are unchanged.
+
+## [2.17.1]
+
+### Added
+
+- **Documentation — SETUP_GUIDE.md, USER_GUIDE.md, docs/ARCHITECTURE.md,
+  and docs/ONBOARDING_PRESET_PLAN.md.** SETUP_GUIDE.md is the new
+  first-run onboarding page: a **Lite / Standard / Full** choice that sets
+  module enables, the World State Detail Level, and cadence toggles in one
+  step (as checklists today), plus "what's safe to disable" for every
+  module, what the shipped defaults give you if you do nothing, and how to
+  move between levels later. USER_GUIDE.md is the full reference — the
+  former README Features, Usage Guide, Configuration, API Compatibility,
+  and Data Storage sections, merged per module so each chapter holds the
+  what/how/settings in one place, plus a 📅 Calendar chapter and the
+  v2.16.0 manual NPC entry editing, which until now were described only in
+  the README's What's New. docs/ARCHITECTURE.md carries the code
+  file trees and module-communication map for contributors.
+  docs/ONBOARDING_PRESET_PLAN.md specs the future one-click first-run
+  dialog for the same presets (settings-key contract, fresh-install
+  gating, apply mechanics) so the code can be built without re-deriving
+  the design.
+- **Story Planner — Pitches only (Add ideas).** A new checkbox in the
+  Generate dialog asks for arc names and descriptions without setup beats.
+  Request about twice as many as you want; the review opens with nothing
+  ticked, so you keep only the pitches worth developing, then use
+  **Generate setup beats** on each kept arc so its beats are written on
+  their own instead of sharing one response with every other arc. The
+  request tells the model the list will be cut down and asks for pitches
+  that differ in what drives them, who they pressure, and their scale.
+  Beats a model writes anyway are dropped and reported in the review.
+  Newcomer entrance markers are not used on pitches; they are checked when
+  setup is generated. A kept pitch with no beats is sent to the narrator as
+  a plain line until its setup exists. Whole-plan and automatic generation
+  are unchanged.
+
+### Changed
+
+- **README.md restructured into a short highlights document** (875 → ~130
+  lines): pitch, trimmed What's New, module table, installation, a Quick
+  Start that begins with picking a setup level, a Lite / Standard / Full
+  summary table, an "every module works independently" reassurance, and a
+  documentation index linking the new guides. No content was deleted from
+  the project — every moved section lives on in USER_GUIDE.md or
+  docs/ARCHITECTURE.md, and all cross-references were repointed.
+- **Knowledge — Current Agenda now holds what the NPC wants.** Dossier
+  scans, Enrich and 🎯 Fields ask for the one situation the NPC most wants
+  to achieve or protect, as the story and their choices show it, and what
+  stands in its way. Tasks, exams and schedules stay out unless the want
+  hinges on one, and a goal that has been reached or dropped goes to the
+  Knowledge Ledger instead of staying in the field. The old wording asked
+  for their agenda "right now", which filled the field with task lists.
+  Interiority's intentions read this field, so they should follow the want
+  too. Existing values are not rewritten by ordinary scans: run 🎯 Fields →
+  Current Agenda once on each major NPC to bring an old entry up to date.
+- **Story Planner — the plan prompt no longer asks for "possible outcomes".**
+  The rule that framed arcs as hypotheses asked the model to describe
+  "attempts, pressures, complications, and possible outcomes", which
+  invited hedged lists in a prompt whose other rules ask for one specific
+  event. It now reads: arcs are plans, not established facts; leave the
+  turning point's outcome unresolved, and never present planned events as
+  already having happened. The Harbor Lease example's last beat now
+  happens in person, with the dockmaster announcing the earlier hearing at
+  the warehouse in front of the crew, since most beats in recent trials
+  arrived on paper. A saved custom system prompt receives neither change.
+
+## [2.17.0]
+
+### Added
+
+- **Knowledge Tracker — Growth-written dossier Personality and Voice.**
+  Once an NPC had Growth evidence, scans stopped updating its
+  `Personality:` line, and the approved profile itself never reached the
+  RP prompt — so growth entered play only if you pasted it in by hand. A
+  new per-NPC **Use Growth in dossier** switch (in the Growth window and
+  on the NPC card) fixes that: one explicit, disclosed model call turns
+  the generated profile into proposed one-line `Personality:`/`Voice:`
+  text — the profile's prose is never injected, because its scene quotes
+  would turn into catchphrases, it is too long for the slot, and it would
+  feed on itself through capture. The proposal lands in Staging with a
+  per-sentence change list, evidence links and advisory warnings, and
+  **Accept & Write** makes the approved text the field text, so it
+  reaches the RP prompt by construction. Nothing is drafted without the
+  explicit action, no draft writes anything, and Growth items are
+  excluded from Accept All and every auto-approval path.
+  (`knowledge/growth_dossier.js`, `knowledge/growth_dossier_review.js`,
+  `knowledge/growth_dossier_state.js`, `knowledge/growth_history.js`,
+  `knowledge/growth_lineage.js`, with the ownership rule in
+  `knowledge/field_ownership.js` and seams in `knowledge/staging.js`,
+  `knowledge/lorebook.js`, `knowledge/render.js`, `knowledge/prompts.js`
+  and `knowledge/growth.js`; designed in
+  `docs/GROWTH_PROFILE_INJECTION_SCOPE.md`, Phases 1–4.)
+  - **The switch decides who owns the two lines.** On: Growth owns
+    Personality and Voice — scans, single-NPC updates, Enrich and 🎯
+    field refresh leave both lines alone while still updating every
+    other field and the Knowledge Ledger. Off: the approved text stays
+    (nothing reverts) and scans own both lines again from the next scan
+    on; a pending Growth item can't be accepted while the switch is off.
+    Never set — every NPC until you touch it: today's rule, where
+    evidence keeps locking Personality and scans own Voice, so upgrading
+    changes nothing for anyone.
+  - **Reviewed sentence by sentence.** The Staging diff gains the
+    change list: add / edit / keep / remove actions, links into the
+    existing evidence view (including "no longer on file" for deleted
+    evidence), "no evidence" labels for pre-Growth original and
+    hand-edited text, and advisory warnings for quotes, typology
+    vocabulary and limit overruns. Reviewer edits outside the two owned
+    lines warn and are never written. An intervening scan, hand edit or
+    field refresh never silently wins: a Growth acceptance rebuilds only
+    the two owned lines onto a fresh dossier, and a scan acceptance
+    re-applies Growth-owned lines unless the reviewer explicitly rewrote
+    them.
+  - **Per-NPC length limits.** Personality and Voice get separate limits
+    per NPC — defaults 450/350, raisable to 1,500/1,000, with an
+    estimated token cost shown beside them. Going over the NPC's limit
+    warns; only the 1,500/1,000 Growth ceiling rejects. Scans stay bound
+    to 900/600 for every NPC, and a 🎯 refresh keeps an over-limit line
+    with a message saying so.
+  - **A look-back history.** Each acceptance appends one record — the
+    date, the approved text and the change list, with the pre-Growth
+    original on the first record only — capped at the last 10 per NPC.
+    It lives in a dedicated disabled `[MWT:growth-history]` lorebook
+    entry that is never injected and never touches localStorage,
+    survives reloads, backups, renames and identity merges, and is
+    viewable per NPC in the Growth window, newest first.
+  - **An advisory echo warning.** A kept sentence whose supporting
+    evidence all comes from RP messages written after it was first
+    approved is flagged — by message time, not capture time, so
+    backfilling older scenes never trips it; canon support suppresses
+    the flag and undated evidence is neutral. Advisory only: it never
+    blocks acceptance.
+  - **Scope follows Lorebook Scope, and the cost is one call.** The
+    switch, the limits, the approved text and the history all live in
+    the Knowledge lorebook, so they follow the Knowledge → Lorebook
+    Scope setting; raw evidence stays in the chat where it was captured,
+    and a new chapter never treats missing evidence as a change. Each
+    drafted proposal costs one model call, reusing the Growth model
+    settings — no new setting.
+
+### Changed
+
+- **Evidence capture no longer sees the dossier's identity lines.** All
+  three capture paths (manual, continuous, backfill) strip
+  `Personality:`, `Voice:`, `Tone:` and `Perceived as:` from the
+  existing context handed to the model — for every NPC, whether or not
+  the new option is on — so dossier text can no longer loop back into
+  capture and confirm itself. Role, background and canon context are
+  retained.
+
+### Fixed
+
+- **The Growth window explainer now states the Personality freeze
+  correctly:** it begins at the first evidence capture, not once a
+  growth profile is saved.
+
 ## [2.16.1]
 
 ### Changed
@@ -1352,7 +1829,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Story Planner V3 Phase 4 — opt-in private NPC author context**
-  (`docs/STORY_PLANNER_ROADMAP_V3.md`). Scoped generation can now plan with
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md`). Scoped generation can now plan with
   what only the author knows. The Generate dialog gains a collapsed
   **Opt-in private NPC author context (this chat)** picker: every major NPC
   dossier offers six field groups — public profile, agenda, secrets,
@@ -1401,10 +1878,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     review editor.
 - **Story Planner V3 is complete through its planned scope.** With author
   context above and the arc-quality pass below, every planned phase of
-  `docs/STORY_PLANNER_ROADMAP_V3.md` has shipped: the Phase 0 attribution
+  `archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md` has shipped: the Phase 0 attribution
   and projection inventory (2.9.0), scoped Add/Refresh, selected journey
   subjects, cast policy, and newcomer continuity (Phases 1–3, 2.9.1), plus
-  Phases 4–5 here. The baseline `docs/STORY_PLANNER_ROADMAP.md` closed with
+  Phases 4–5 here. The baseline `archive/completed_plans/STORY_PLANNER_ROADMAP.md` closed with
   its Phase 7 in 2.9.0. The roadmap's deferred §7 items — an independent arc
   type and horizon, execution prerequisites, staged disclosure with release
   flags, a proposed-cast collection, and two-pass turning-point generation —
@@ -1415,7 +1892,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Story Planner: arcs are asked for a story, not a to-do list** (V3 Phase
-  5, `docs/STORY_PLANNER_ROADMAP_V3.md`). Reported by testers: plans came
+  5, `archive/completed_plans/STORY_PLANNER_ROADMAP_V3.md`). Reported by testers: plans came
   back bland. Setup beats showed one character doing the
   same thing four times, or were only logistics (a fax arrives, a sheet gets
   pinned, a rental meter starts). Each arc's description now names what is
@@ -1482,12 +1959,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 7 — documentation, observation, and default decisions
-  (`docs/STORY_PLANNER_ROADMAP.md`). The planner now measures its own real
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). The planner now measures its own real
   usage so the roadmap's remaining automation decisions can be made from
   evidence rather than intuition, without retaining any prompt or story
   content. Closes Phase 7, the final phase of the Story Planner feature
   update; the host-runtime manual QA matrix remains pending and tracked in
-  `docs/STORY_PLANNER_PHASE7_DECISIONS.md`.
+  `archive/completed_plans/STORY_PLANNER_PHASE7_DECISIONS.md`.
   - A per-chat, content-free `phase7Metrics` store records full and targeted
     generation counts, targeted proposals applied, progress checks with
     verified-suggestion and no-evidence results, accepted and ignored
@@ -1523,7 +2000,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and controls work" section explaining Pin vs Focus vs Park, Planted vs
     Skipped, Ready vs Resolved, and Archive vs Delete, the manual
     evidence-backed progress review, and the `/wt-beat` commands.
-  - `docs/STORY_PLANNER_PHASE7_DECISIONS.md` records the four default
+  - `archive/completed_plans/STORY_PLANNER_PHASE7_DECISIONS.md` records the four default
     decisions with their rationale — progress checking stays manual,
     `activateWhen` stays a human note, the Story Palette does not silently
     alter auto-generation defaults, and closed-memory ranking stays pin plus
@@ -1575,7 +2052,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 6 — creative palette and safe character grounding
-  (`docs/STORY_PLANNER_ROADMAP.md`). Two opt-in, per-chat controls now steer
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Two opt-in, per-chat controls now steer
   full-plan **and** targeted-arc generation:
   - **Story Palette** — emphasis chips (conflict, mystery, discovery,
     consequences, relationships, character growth, quiet moments,
@@ -1736,7 +2213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 5 — evidence-backed progress suggestions
-  (`docs/STORY_PLANNER_ROADMAP.md`). A manual **Check progress** action
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). A manual **Check progress** action
   reviews every active arc's current beat and every Ready arc's payoff
   against settled messages newer than that item's last check watermark, and
   returns only reviewable proposals: **Beat appears planted**, **Arc may be
@@ -1806,7 +2283,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 4 — targeted arc development
-  (`docs/STORY_PLANNER_ROADMAP.md`). Each arc card now offers Rework remaining
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Each arc card now offers Rework remaining
   setup, Develop this arc, and Suggest an alternate route, so one weak
   route can be improved without regenerating or churning the whole plan.
   Rework preserves the title, endpoint, section, and historical beats; Develop
@@ -1860,7 +2337,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Story Planner Phase 3 — parked arcs, focus, and injection-mode cleanup
-  (`docs/STORY_PLANNER_ROADMAP.md`). Arcs can now be Parked and later Resumed
+  (`archive/completed_plans/STORY_PLANNER_ROADMAP.md`). Arcs can now be Parked and later Resumed
   without losing their pin, focus, setup beats, or optional “activate when”
   note. Parked arcs are retained through regeneration but never age, trigger
   reminders, or enter narrator injection; resuming resets their reminder age
@@ -1921,7 +2398,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the beat text, and a full action set: add, edit, delete, reorder
   (move up/down), mark Planted, mark Skipped with an optional reason,
   Undo (restore a Planted beat to pending), and Restore to pending (for a
-  Skipped beat). Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 2.
+  Skipped beat). Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 2.
   - Skip and Delete are deliberately separate. Skip keeps the beat as a
     historical record and stores an optional reason (prompted); Delete
     permanently removes the beat after a specific confirmation that says
@@ -2010,7 +2487,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remainder pending (clamped exactly as the v1 reader did), and drops
   `beatIndex` from the stored shape. Existing v1 plans, history snapshots,
   imports, and backups migrate without losing an arc or its planted progress.
-  Closes `docs/STORY_PLANNER_ROADMAP.md` Phase 1.
+  Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 1.
   - `isArcReady` is now "at least one beat and none pending" rather than
     `beatIndex >= beats.length`; `getCurrentBeat` derives from the first
     pending beat record; `advanceBeat`/`retreatBeat` flip the target beat's
@@ -2085,7 +2562,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Phase 0 regression coverage pinning the current Story Planner behavior before
-  the store redesign (`docs/STORY_PLANNER_ROADMAP.md` Phase 0). The fixtures and
+  the store redesign (`archive/completed_plans/STORY_PLANNER_ROADMAP.md` Phase 0). The fixtures and
   tests establish the invariants the later phases must preserve.
   - Literal v1 compatibility records (`test/fixtures/story_planner_phase0.js`)
     keep beats as strings; `beatIndex` is the only durable evidence that the
@@ -2127,7 +2604,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stay out of the prompt. An arc the model renames but keeps the marker
   on now keeps its id and planted progress. Handles are random rather
   than sequential so the model has no numbering to renumber or extend
-  onto new arcs. Closes `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  onto new arcs. Closes `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase
   patch 3".
   - The marker is stripped wherever the model puts it — bolded with the
     name, moved after it, in the body, or on a beat — and matched
@@ -2182,7 +2659,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reminder is not an automatic model call; `turnsSinceAdvance`
   continues to age through auto-generation and resets only when the
   current beat changes or the arc is reopened. Closes the Ready-arc
-  lifecycle item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch
+  lifecycle item in `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch
   2"; tests in `test/beats.test.js` (`takeDueNudges` → Ready-arc
   reminder).
 
@@ -2197,7 +2674,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected, but prompt and history growth no longer accumulate with
   every closed arc. The arcs themselves stay in storage and remain
   visible; only the generation projection changes. Closes the
-  bounded-memory item in `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase
+  bounded-memory item in `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase
   patch 2"; tests in `test/beats.test.js` (`closed regeneration
   memory`).
 
@@ -2211,7 +2688,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mis-timing the next reminder. Every UI status transition now goes
   through the one `setArcStatus` path that resets age on reactivation
   and clears marks on any status change. Closes the lifecycle item in
-  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 2".
+  `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 2".
 - **The All-mode injection description no longer claims resolved arcs
   are injected.** The injection-mode radio for "All" now reads "Inject
   every active arc; resolved and dropped arcs are excluded," matching
@@ -2230,7 +2707,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beats it was shown cannot duplicate or displace them. The exact stored
   strings stay in the prefix; only the normalized form is used for matching.
   Reproduces and closes the positional-progress cases in
-  `docs/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 1"; tests in
+  `archive/completed_plans/STORY_PLANNER_ROADMAP.md` §"Pre-phase patch 1"; tests in
   `test/plan.test.js` (`regeneration progress safety`).
 - A model response that omits pending beats can no longer mark an arc
   Ready. When the model returns only the planted prefix (or nothing usable
@@ -2252,7 +2729,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arcs that were materially edited keep the user's version rather than being
   silently overwritten. A title the user re-added as a new arc during the
   call is treated as live, not tombstoned. Covered by `test/plan.test.js`
-  (`regeneration progress safety`); see `docs/STORY_PLANNER_ROADMAP.md`
+  (`regeneration progress safety`); see `archive/completed_plans/STORY_PLANNER_ROADMAP.md`
   §"Pre-phase patch 1".
 
 ## [2.8.9]
@@ -2306,7 +2783,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Implemented the measurement-only scope of Phase 6 in
-  `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`. World State injection snapshots now
+  `archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`. World State injection snapshots now
   report stored and injected estimated tokens per semantic section, separate
   factual/hook totals, final registered payload tokens, outer Budget action,
   and explicit section omission/partial-truncation reasons.
@@ -2389,7 +2866,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 5 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): downstream modules now read
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): downstream modules now read
   World State through shared core accessors instead of each maintaining its
   own scene parser, and every prompt consumer receives a factual projection
   that excludes hook sections.
@@ -2448,7 +2925,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 4 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): full refreshes now use the shared
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): full refreshes now use the shared
   World State document validator before grounding and commit, while delta
   refreshes, Current Scene regeneration, and Chronicle scene-anchor patches
   validate their complete resulting documents before writing.
@@ -2473,7 +2950,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Implemented Phase 3 of the World State reliability roadmap
-  (`docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): the fixed default generation
+  (`archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`): the fixed default generation
   prompt is now built by a hook-mode-aware `buildDefaultSystemPrompt(hookMode)`
   in `world_state/prompts.js`.
 - Rewrote the built-in prompt around the `Current Scene` contract: good/bad
@@ -2527,7 +3004,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Phase 0 of world_state_improvement_roadmap.md
   - reusable World State fixtures and corresponding tests
-- Phase 1 of `docs/WORLD_STATE_IMPROVEMENT_ROADMAP.md`:
+- Phase 1 of `archive/completed_plans/WORLD_STATE_IMPROVEMENT_ROADMAP.md`:
   - a dependency-free shared World State Markdown parser and `Current Scene`
     contract in `core/world_state_document.js`;
   - byte-preserving scene patching, `Present` normalization, structural/default/
@@ -2540,7 +3017,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **🏠 Overview tab — the unified MWT dashboard** (TODO §3, planned in
-  [`docs/overview_dashboard_plan.md`](docs/overview_dashboard_plan.md)):
+  [`archive/completed_plans/overview_dashboard_plan.md`](archive/completed_plans/overview_dashboard_plan.md)):
   one page of everything waiting on you in this chat, and the new
   first tab of the MWT modal.
   - **Status cards** for every module signal — World State staleness
@@ -2616,7 +3093,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Accessibility Slice 5 — cards and relationship views
-  (`docs/accessibility_plan.md` §5 Slice 5 / §4.6): labeled zoom-in / zoom-out
+  (`archive/completed_plans/accessibility_plan.md` §5 Slice 5 / §4.6): labeled zoom-in / zoom-out
   / reset controls on the relationship graph with an announced zoom level
   (also updated by wheel zoom); keyboard node selection (Tab to a node,
   Enter/Space to select, Enter again to open the dossier) with the selected
@@ -2680,7 +3157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hidden from assistive technology, tooltip-only explanations became visible
   help text, form labels are associated with their controls, and the last
   color/emoji-only state indicators gained text equivalents** (Slice 4 of the
-  accessibility pass, `docs/accessibility_plan.md` §4.4 and §5; tests in
+  accessibility pass, `archive/completed_plans/accessibility_plan.md` §4.4 and §5; tests in
   `test/accessible_names.test.js` and `test/accessible_names_css.test.js`):
   - Every emoji/symbol-only button across the six module renderers, the
     diagnostics panel, the paused-store banners, and the extensions drawer
@@ -2826,7 +3303,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Keyboard focus is now visible without restyling SillyTavern, status
   messages are announced, busy state is owned per control, and motion
   respects `prefers-reduced-motion`** (Slice 3 of the accessibility pass,
-  `docs/accessibility_plan.md` §4.3–§4.5 and §5; tests in
+  `archive/completed_plans/accessibility_plan.md` §4.3–§4.5 and §5; tests in
   `test/focus_status_motion.test.js` and
   `test/focus_status_motion_css.test.js`):
   - The old bare-element `:focus-visible` rule (`button:focus-visible`,
@@ -2874,7 +3351,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Tabs are now real WAI-ARIA tab lists** (Slice 2 of the accessibility
-  pass, `docs/accessibility_plan.md` §4.2 and §5; tests in
+  pass, `archive/completed_plans/accessibility_plan.md` §4.2 and §5; tests in
   `test/tab_navigation.test.js`):
   - New shared `wireTablist()` helper in `core/ui.js` owns the whole tab
     contract — `role="tablist"` / `tab` / `tabpanel`, an explicit
@@ -2906,7 +3383,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Modals are now real dialogs, with one authoritative close path** (Slice 1
-  of the accessibility pass, `docs/accessibility_plan.md` §4.1 and §5; tests
+  of the accessibility pass, `archive/completed_plans/accessibility_plan.md` §4.1 and §5; tests
   in `test/modal_accessibility.test.js`):
   - `.mwt-modal-panel` — the dialog surface, not the backdrop container — now
     carries `role="dialog"` and `aria-labelledby` pointing at a stable heading

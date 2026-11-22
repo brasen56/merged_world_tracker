@@ -55,6 +55,7 @@ import {
 } from './ledger_cleanup.js';
 import {
     listCleanupRecovery,
+    getCleanupRecord,
     cleanupRecoveryUsage,
     exportCleanupRecovery,
     importCleanupRecovery,
@@ -981,7 +982,7 @@ function openReviewModalShell(name, { capture, eligibility }) {
             if (btn.disabled || session.restored) return;
             setControlBusy(btn, true); btn.textContent = '⏳ Restoring…';
             session.saving = 'Undo';
-            setStatus(modal, 'Restoring the original ledger span…', 'info');
+                    setStatus(modal, 'Restoring the cleanup-owned content…', 'info');
             try {
                 const result = await restoreReviewedLedgerCleanup(actionId);
                 if (!scopeStillCurrent(session.scope).ok || !modal.isConnected) { modal._closeModal?.(); return; }
@@ -1114,10 +1115,10 @@ export async function openCleanupRecoveryModal() {
                     <td>${escapeHtml(String(r.createdAt || '').replace('T', ' ').slice(0, 19))}</td>
                     <td>~${fmt(r.estimatedTokens)}</td>
                     <td class="kt-crec-actions">
-                        ${r.status === 'applied' && r.actionType === 'ledger-condensation'
+                        ${r.status === 'applied' && ['ledger-condensation', 'field-cleanup'].includes(r.actionType)
                 ? `<button class="mwt-btn kt-crec-restore" data-action="${escapeHtml(r.actionId)}">Restore</button>`
                 : ''}
-                        ${['application-pending', 'outcome-uncertain'].includes(r.status) && r.actionType === 'ledger-condensation'
+                        ${['application-pending', 'outcome-uncertain'].includes(r.status) && ['ledger-condensation', 'field-cleanup'].includes(r.actionType)
                 ? `<button class="mwt-btn kt-crec-reconcile" data-action="${escapeHtml(r.actionId)}">Reconcile</button>`
                 : ''}
                         <button class="mwt-btn kt-crec-export" data-action="${escapeHtml(r.actionId)}">Export</button>
@@ -1212,7 +1213,10 @@ export async function openCleanupRecoveryModal() {
                 setControlBusy(restoreBtn, true); restoreBtn.textContent = '⏳…';
                 setStatus(modal, 'Restoring the original ledger span…', 'info');
                 try {
-                    const result = await restoreReviewedLedgerCleanup(btn.dataset.action);
+                    const record = await getCleanupRecord(btn.dataset.action);
+                    const result = record?.actionType === 'field-cleanup'
+                        ? await (await import('./field_cleanup_review.js')).restoreFieldCleanup(btn.dataset.action)
+                        : await restoreReviewedLedgerCleanup(btn.dataset.action);
                     if (result?.ok) {
                         await refreshList();
                         setStatus(modal, `Original restored for this record${result.reconciled ? ' (reconciled from an uncertain outcome)' : ''}. Unrelated edits were preserved.`, 'success');

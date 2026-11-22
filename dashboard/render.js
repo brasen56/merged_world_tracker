@@ -1,3 +1,4 @@
+import { selectSettingsSection } from '../core/settings_workspace.js';
 /**
  * dashboard/render.js — the Overview tab.
  *
@@ -120,7 +121,7 @@ function describeRelink(finding) {
     const crowded = Number(finding.withOtherCandidates) || 0;
     let summary = names.length
         ? `${countText(names.length, 'profile')} can be relinked to ${names.length === 1 ? 'its' : 'their'} NPC (${nameList(names)}).`
-        : 'nothing can be relinked automatically.';
+        : 'No automatic relink is available; the remaining profiles need manual review.';
     if (crowded) {
         // The console twin's wording (MWT.profiles.relink): relink does pick a
         // candidate automatically — largest entry, newest on ties — so the
@@ -129,7 +130,7 @@ function describeRelink(finding) {
     }
     return {
         summary,
-        review: (finding.unmatched || []).map(({ npc }) => `${npc} — no NPC registry record; scan the NPC into the Knowledge book first.`),
+        review: (finding.unmatched || []).map(({ npc }) => `${npc} — no NPC registry record, but a generated profile remains in the separate NPC Profiles lorebook. If this NPC was intentionally removed, delete its profile there too; otherwise scan the NPC into the Knowledge book first. Removing an NPC from the major/minor tab or Knowledge lorebook does not delete its generated profile.`),
     };
 }
 
@@ -184,7 +185,7 @@ export function renderMaintenanceFindings(findings = []) {
         const { summary, review } = describe(finding);
         const action = finding.kind === 'duplicate-profiles'
             ? '<button type="button" class="mwt-btn" data-maintenance-action="prune">Preview profile prune</button>'
-            : finding.kind === 'relink-candidates'
+            : finding.kind === 'relink-candidates' && finding.relinkNpcs?.length
                 ? '<button type="button" class="mwt-btn" data-maintenance-action="relink">Preview profile relink</button>'
                 : '';
         return `<li class="mwt-overview-finding"><strong>${escapeHtml(label)}</strong> — ${escapeHtml(summary)} <code>${escapeHtml(finding.command || 'review manually')}</code>${action}${renderReview(review)}</li>`;
@@ -273,6 +274,7 @@ export function renderOverviewSnapshot(snapshot = {}) {
         </div>
         ${drift ? `<p class="mwt-overview-weekday-drift" role="status"><strong>${drift.grammar === 'custom' ? 'Custom calendar' : 'Gregorian'} weekday mismatch</strong>: message #${escapeHtml(drift.messageIndex)} tags ${escapeHtml(drift.date)} as ${escapeHtml(drift.tagged)}; the ${drift.grammar === 'custom' ? 'calendar' : 'Gregorian'} date is ${escapeHtml(drift.computed)}. Story data has not been changed.</p>` : ''}
         <div class="mwt-overview-grid">
+            ${snapshot.ledger ? renderCell('ledger', 'Ledger', value => `${value.currency ? `${escapeHtml(value.balance)} ${escapeHtml(value.currency)}` : escapeHtml(value.state && value.state !== 'Ready' ? value.state : 'No currencies yet')} · ${countText(value.carried, 'carried item')}`, { icon: '💰', tab: 'ledger' }) : ''}
             ${snapshot.ambient ? renderCell('ambient', 'Ambient Conditions', ambientBody, { icon: '🌦️', tab: 'settings', target: 'ambient-settings' }) : ''}
             ${snapshot.calendar ? renderCell('calendar', 'Calendar', value => `<p>${escapeHtml(value?.state ?? 'not configured')}</p>${value?.today ? `<p>Today: ${escapeHtml(value.today)}<br>Tomorrow: ${escapeHtml(value.tomorrow)}<br>Source: ${escapeHtml(value.time?.source)}</p>` : ''}${value?.eventsLine ? `<p>Events: ${escapeHtml(value.eventsLine)}</p>` : ''}${value?.reason ? `<p>${escapeHtml(value.reason)}</p>` : ''}`, { icon: '📅', tab: 'calendar' }) : ''}
             ${renderCell('worldState', 'World State', () => worldBody, { icon: '🌍', tab: 'world-state' })}
@@ -360,10 +362,12 @@ export function wireOverviewPane(root, {
             if (body) body.scrollTop = 0;
             const target = button.dataset.overviewTarget;
             if (target === 'generation-coordinator') {
+                selectSettingsSection(root, 'automation');
                 const disclosure = root.querySelector('#mwt-settings-generation-coordinator');
                 disclosure?.setAttribute('open', '');
                 disclosure?.scrollIntoView?.({ block: 'start' });
             } else if (target === 'ambient-settings') {
+                selectSettingsSection(root, 'ambient');
                 const disclosure = root.querySelector('#mwt-ambient-settings');
                 disclosure?.setAttribute('open', '');
                 disclosure?.scrollIntoView?.({ block: 'start' });

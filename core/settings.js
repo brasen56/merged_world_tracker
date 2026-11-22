@@ -322,6 +322,8 @@ const GLOBAL_SETTINGS_KEY = 'merged_world_tracker';
  * not set (see resetToAbsent below).
  */
 export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
+    // First-run setup acknowledgement; independent of the settings schema.
+    onboardingVersion: 0,
     // Shared API defaults
     apiUrl: '',
     apiKey: '',
@@ -353,6 +355,7 @@ export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
     showFloatKnowledge: true,
     showFloatStoryPlanner: true,
     showFloatInteriority: true,
+    showFloatLedger: true,
     showFloatSettings: true,
     collapseFloatButtons: false,
     buttonStyle: 'modern', // 'modern' | 'classic'
@@ -362,6 +365,9 @@ export const GLOBAL_SETTINGS_DEFAULTS = Object.freeze({
     enableKnowledge: true,
     enableStoryPlanner: true,
     enableInteriority: true,
+    enableLedger: true,
+    injectLedger: true,
+    ledgerProposals: false,
     // Interiority injection depth/role (same neighborhood as world state)
     interiorityDepth: 1,
     interiorityRole: 'system',
@@ -417,6 +423,11 @@ export function getGlobalSettings() {
     } catch {
         return {};
     }
+}
+
+/** Save a global settings patch through the canonical, validated manager. */
+export function saveGlobalSettings(patch) {
+    return globalSettingsManager.saveSettings(patch);
 }
 
 /**

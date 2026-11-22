@@ -10,7 +10,7 @@ import { getPlayerNames, getUserNames, notify, downloadJson, pickTextFile } from
 
 import {
     TRACKER_SENTINEL,
-    HISTORY_KEY_PREFIX, state, ktSetStatus,
+    state, ktSetStatus,
 } from './state.js';
 import { getSettings, saveSettings } from './settings.js';
 import {
@@ -24,16 +24,16 @@ import {
     synthesizeMinorFromUpdate, synthesizeMajorFromUpdate,
     formatDossierEntry, synthesizeDossierFromUpdate,
     writeToLorebook,
-    loadEntryContent, getHistory,
+    loadEntryContent, getHistory, importHistory,
     fieldsFromScanRecord,
 } from './lorebook.js';
 import { applyFieldOwnership } from './field_ownership.js';
 import { validateScanRecord } from './field_contract.js';
 import { getLorebookName, getStateLorebookName } from './scope.js';
-import { isStoreEntry, mergeStoreQuarantineItems } from './store.js';
-import { isCleanupRecoveryEntry } from './cleanup_recovery.js';
+import { mergeStoreQuarantineItems, hydrateCurrentBooks, assertHydrated, flushBook, withStoreLock } from './store.js';
+import { isInternalEntry } from './internal_entries.js';
 import { reconcileImportedUid, findEntryUidByNpcIdentity } from './reconcile.js';
-import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema } from './schema.js';
+import { checkRegistryRecord, canonicalizeRegistryIdentityClaims, knowledgeStoreSchema, repairGrowthDossier } from './schema.js';
 import { makeQuarantineItem } from '../core/quarantine.js';
 import { captureScope } from '../core/index.js';
 import { scopeStillCurrent } from '../core/scope.js';
@@ -359,7 +359,8 @@ export function mergeScanResults(newItems, removeNotification) {
         // supersededContent and is restorable from the staging panel, so a
         // pending promote/demote that a fresh scan supersedes is recoverable.
         const key = identityOf(item);
-        const existingIdx = state.stagingItems.findIndex(it => identityOf(it) === key);
+        // Growth and scan reviews are independent; neither may supersede the other.
+        const existingIdx = state.stagingItems.findIndex(it => it.type !== 'growth-dossier' && identityOf(it) === key);
         let stored;
         if (existingIdx >= 0) {
             const existing = state.stagingItems[existingIdx];
@@ -370,6 +371,7 @@ export function mergeScanResults(newItems, removeNotification) {
                     ...item,
                     id: existing.id,
                     edited: true,
+                    reviewerBaseline: existing.reviewerBaseline ?? existing.proposedContent,
                     mergedContent: existing.mergedContent,
                     proposedContent: existing.mergedContent || existing.proposedContent,
                     existingContent: existing.existingContent ?? item.existingContent,
@@ -401,7 +403,7 @@ export function mergeScanResults(newItems, removeNotification) {
 // ─── NPC Export / Import ─────────────────────────────────────────────────────
 
 function identicalImportEntry(entries, name, content) {
-    const matches = Object.values(entries || {}).filter(entry => !isStoreEntry(entry) && !isCleanupRecoveryEntry(entry)
+    const matches = Object.values(entries || {}).filter(entry => !isInternalEntry(entry)
         && normalizeRegistryName(entry?.comment) === normalizeRegistryName(name));
     // Do not guess which of several conflicting physical entries is ours.
     if (matches.length !== 1 || typeof content !== 'string'
@@ -430,6 +432,7 @@ export async function exportNpcs() {
                 history = getHistory(info.uid, getLorebookName());
             } catch { /* ignore */ }
         }
+        const growthDossier = repairGrowthDossier(info.growthDossier);
         entries[name] = {
             uid: info.uid ?? null,
             type: info.type || 'minor',
@@ -446,6 +449,7 @@ export async function exportNpcs() {
             ...(info.entityId ? { entityId: info.entityId } : {}),
             aliases: Array.isArray(info.aliases) ? info.aliases : [],
             ...(Array.isArray(info.mergedFrom) ? { mergedFrom: info.mergedFrom } : {}),
+            ...(growthDossier !== undefined ? { growthDossier } : {}),
             content,
             history,
         };
@@ -612,6 +616,18 @@ export async function importNpcs() {
             // audit entries are append-only facts. Without this the imported
             // NPC came back as a different entity than the one exported.
             const prev = registry[name] || {};
+            // Local choices win per field; the file fills only missing switch
+            // and limit values. Repair both sides before merging, retaining
+            // explicit false without reviving malformed settings.
+            const localGrowth = repairGrowthDossier(prev.growthDossier);
+            const importedGrowth = repairGrowthDossier(entry.growthDossier);
+            const growthDossier = repairGrowthDossier(localGrowth === undefined ? importedGrowth
+                : importedGrowth === undefined ? localGrowth : {
+                    ...importedGrowth, ...localGrowth,
+                    ...((importedGrowth.limits || localGrowth.limits) ? {
+                        limits: { ...importedGrowth.limits, ...localGrowth.limits },
+                    } : {}),
+                });
             registry[name] = {
                 ...prev, // keep local-only fields (e.g. profileUid)
                 uid: incomingUid,
@@ -625,6 +641,8 @@ export async function importNpcs() {
                     ...(Array.isArray(entry.mergedFrom) ? entry.mergedFrom : []),
                 ],
             };
+            if (growthDossier === undefined) delete registry[name].growthDossier;
+            else registry[name].growthDossier = growthDossier;
 
             // If the uid was dropped (or was never present) but content is
             // available, write it as a new entry in the local lorebook.
@@ -648,11 +666,10 @@ export async function importNpcs() {
             }
 
             const finalUid = registry[name].uid;
-            if (entry.history && Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
-                try {
-                    const key = HISTORY_KEY_PREFIX + destination + '_' + finalUid;
-                    localStorage.setItem(key, JSON.stringify(entry.history));
-                } catch { /* quota */ }
+            if (Array.isArray(entry.history) && entry.history.length > 0 && finalUid != null) {
+                // Capped and trimmed like any snapshot; Restore history is
+                // best-effort, so a refusal never fails the import.
+                importHistory(finalUid, entry.history, destination);
             }
         }
 
@@ -773,7 +790,15 @@ export async function reconcileRegistry() {
     const result = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
     if (!state.wiScript) return result;
 
-    const ktWi = await state.wiScript.loadWorldInfo(getLorebookName());
+    // A repair must never run against the permissive pre-hydration fallback:
+    // that would replace saved identity metadata with freshly adopted records.
+    const scopeToken = captureScope();
+    const bookName = getLorebookName();
+    await hydrateCurrentBooks();
+    if (!scopeStillCurrent(scopeToken).ok || getLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry reconciliation.');
+    assertHydrated(bookName, 'reconcile NPC identities');
+    const ktWi = await state.wiScript.loadWorldInfo(bookName);
+    if (!scopeStillCurrent(scopeToken).ok || getLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry reconciliation.');
     const rawEntries = ktWi?.entries;
     if (!rawEntries) return result;
 
@@ -790,7 +815,7 @@ export async function reconcileRegistry() {
         const uid = Number(entry?.uid ?? uidStr);
         if (!Number.isFinite(uid)) continue;
         entryByUid.set(uid, entry);
-        if (isStoreEntry(entry) || isCleanupRecoveryEntry(entry)) continue;
+        if (isInternalEntry(entry)) continue;
         const label = String(entry?.comment || '').trim();
         if (!label || playerSet.has(label.toLowerCase())) continue;
         npcEntries.push({
@@ -887,6 +912,11 @@ export async function reconcileRegistry() {
     }
 
     saveRegistry(registry);
+    // Completion promises durability, not just the store's 1.2s debounce.
+    // Otherwise a successful repair disappears on the next page reload.
+    if (!await withStoreLock(() => flushBook(bookName))) {
+        throw new Error('NPC registry could not be saved. The changes remain in memory; retry before reloading.');
+    }
     return result;
 }
 
@@ -899,6 +929,7 @@ export async function importFromLorebooks() {
     const imported = { npcs: 0, states: 0 };
     const skipped  = { npcs: 0, states: 0 };
     const errors = [];
+    const scopeToken = captureScope();
 
     // ── Knowledge Tracker (reconcile registry ↔ physical entries) ────────
     let kt = { verified: 0, relinked: 0, detached: 0, ambiguous: 0, adopted: 0, duplicates: 0, report: [] };
@@ -910,7 +941,11 @@ export async function importFromLorebooks() {
 
     // ── State Tracker ───────────────────────────────────────────────────
     try {
-        const stWi = await state.wiScript.loadWorldInfo(getStateLorebookName());
+        const bookName = getStateLorebookName();
+        if (!scopeStillCurrent(scopeToken).ok) throw new Error('The chat changed. Retry the import.');
+        const stWi = await state.wiScript.loadWorldInfo(bookName);
+        if (!scopeStillCurrent(scopeToken).ok || getStateLorebookName() !== bookName) throw new Error('The chat or lorebook scope changed. Retry the import.');
+        assertHydrated(bookName, 'import state tracker identities');
         if (stWi?.entries) {
             const stateReg = getStateRegistry();
 
@@ -933,6 +968,9 @@ export async function importFromLorebooks() {
                 imported.states++;
             }
             saveStateRegistry(stateReg);
+            if (!await withStoreLock(() => flushBook(bookName))) {
+                throw new Error('State tracker registry could not be saved. Retry before reloading.');
+            }
         }
     } catch (err) {
         errors.push(`State Tracker: ${err.message}`);
@@ -966,5 +1004,5 @@ export async function importFromLorebooks() {
         );
     }
     ktSetStatus(msg, errors.length ? 'error' : 'success');
-    notify('Knowledge Tracker', msg, parts.length ? 'success' : 'info');
+    notify('Knowledge Tracker', msg, errors.length ? 'error' : (parts.length ? 'success' : 'info'));
 }

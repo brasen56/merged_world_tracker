@@ -50,6 +50,7 @@ import {
 } from '../schema/manifest.js';
 import { CHAT_METADATA_SCHEMA_IDS } from '../schema/registry.js';
 import { readCleanupRecoveryContainerFromBook } from '../knowledge/cleanup_recovery.js';
+import { readGrowthHistoryContainerFromBook } from '../knowledge/growth_history.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 
 /**
@@ -143,6 +144,7 @@ export async function collectBackup({
 
     let knowledgeStore;
     let cleanupRecovery;
+    let growthHistory;
     if (includeKnowledgeStore) {
         const knowledgeBook = getLorebookName();
         const stateBook = getStateLorebookName();
@@ -210,15 +212,23 @@ export async function collectBackup({
         // module or no book simply means no container to carry.
         let cleanupRead = { ok: true, records: {}, rawRecords: {} };
         if (knowledgeState.wiScript) {
+            let wi;
             try {
-                const wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
-                cleanupRead = readCleanupRecoveryContainerFromBook(wi);
+                wi = await knowledgeState.wiScript.loadWorldInfo(knowledgeBook);
             } catch (err) {
                 throw new Error(
-                    `Backup export cancelled because the "${knowledgeBook}" lorebook's cleanup-recovery container `
-                    + `cannot be read safely (read-failed: ${err.message}). The book could not be loaded.`
+                    `Backup export cancelled because the "${knowledgeBook}" lorebook could not be loaded `
+                    + `(read-failed: ${err.message}).`
                 );
             }
+            const historyRead = readGrowthHistoryContainerFromBook(wi);
+            if (!historyRead.ok) {
+                throw new Error(`Backup export cancelled because the "${knowledgeBook}" lorebook's Growth history cannot be read safely (${historyRead.reason}). Upgrade MWT (or repair the container) before exporting.`);
+            }
+            if (Object.keys(historyRead.records).length > 0) {
+                growthHistory = { version: historyRead.version, records: historyRead.records };
+            }
+            cleanupRead = readCleanupRecoveryContainerFromBook(wi);
         }
         if (!cleanupRead.ok) {
             throw new Error(
@@ -248,6 +258,7 @@ export async function collectBackup({
         knowledgeStore,
         quarantine,
         cleanupRecovery,
+        growthHistory,
         sectionVersions,
         identity: resolvedIdentity,
         createdAt: new Date().toISOString(),

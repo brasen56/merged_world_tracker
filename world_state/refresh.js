@@ -22,6 +22,10 @@ import {
 // barrel→stub alias — the same rule the injection seam follows.
 import { isStorePausedForCurrentScope } from '../core/schema_status.js';
 import { worldStateSchema } from './schema.js';
+import { cutLedgerReport, ledgerMessageDigest } from '../core/ledger_report.js';
+import { createLedgerReceiptIdentityBatch } from '../core/ledger_message_identity.js';
+import { buildLedgerRefreshSnapshot, LEDGER_REPORT_CONTRACT, publishLedgerReport } from '../core/ledger_refresh.js';
+import { countLedgerDiagnostic } from '../core/diagnostics.js';
 
 import { buildDefaultSystemPrompt, buildFormatChangeNote, stripHookSections } from './prompts.js';
 import {
@@ -89,21 +93,43 @@ const SCAN_MAX_CHARS = 20000;
 // watermark stamped past it stays honest. Appended by nextCatchUpChunk().
 const OVERSIZED_SCAN_NOTE = ` […partial message — alone exceeds the ${SCAN_MAX_CHARS}-character scan budget; leading portion only]`;
 
-export function getRecentMessagesForScan() {
+/** Freeze only the supplied narrative, not the display-name prefix or scan
+ * annotations. The raw digest enforces an unchanged-source policy at harvest. */
+function scanMessageRecord(msg, index, suppliedLine) {
+    return { msg, index, suppliedLine };
+}
+
+function persistScanRecords(records, chat) {
+    if (!records.length) return [];
+    const batch = createLedgerReceiptIdentityBatch(chat);
+    const frozen = records.map(({ msg, index, suppliedLine }) => {
+        const name = msg?.name || (msg?.is_user ? 'User' : 'Assistant');
+        return Object.freeze({ index, identity: batch.getIdentity(msg),
+            text: suppliedLine.slice(`${name}: `.length), digest: ledgerMessageDigest(msg.mes) });
+    });
+    batch.save();
+    return frozen;
+}
+
+export function getRecentMessagesForScan({ withRecords = false, collectRecords = withRecords } = {}) {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat();
     const end = getStableHistoryEnd(chat);
     const slice = chat.slice(Math.max(0, end - max), end);
     const lines = [];
+    const records = [];
     let total = 0;
     for (let i = slice.length - 1; i >= 0; i--) {
         const line = scanMessageLine(slice[i]);
         if (!line) continue;
         if (total + line.length > SCAN_MAX_CHARS) break;
         lines.push(line);
+        if (collectRecords) records.push(scanMessageRecord(slice[i], Math.max(0, end - max) + i, line));
         total += line.length + 1;
     }
-    return lines.reverse().join('\n');
+    const text = lines.reverse().join('\n');
+    const frozen = persistScanRecords(records.reverse(), chat);
+    return withRecords ? { text, records: frozen, to: end } : text;
 }
 
 /**
@@ -126,7 +152,7 @@ export function getRecentMessagesForScan() {
  * @returns {{ ok: true, text: string, from: number, to: number }
  *          | { ok: false, reason: string }}
  */
-export function getMessagesSinceForScan(sinceMsg) {
+export function getMessagesSinceForScan(sinceMsg, { withRecords = false } = {}) {
     const max = getMaxScanMessages(getSettings());
     const chat = getChat() || [];
     const end = getStableHistoryEnd(chat);
@@ -141,7 +167,9 @@ export function getMessagesSinceForScan(sinceMsg) {
     }
     const lines = [];
     let total = 0;
-    for (const msg of chat.slice(since, end)) {
+    const records = [];
+    for (let index = since; index < end; index++) {
+        const msg = chat[index];
         const line = scanMessageLine(msg);
         if (!line) continue;
         if (total + line.length > SCAN_MAX_CHARS) {
@@ -150,9 +178,10 @@ export function getMessagesSinceForScan(sinceMsg) {
             return { ok: false, reason: `the unseen interval exceeds the ${SCAN_MAX_CHARS}-character scan budget` };
         }
         lines.push(line);
+        if (withRecords) records.push(scanMessageRecord(msg, index, line));
         total += line.length + 1;
     }
-    return { ok: true, text: lines.join('\n'), from: since, to: end };
+    return { ok: true, text: lines.join('\n'), records: persistScanRecords(records, chat), from: since, to: end };
 }
 
 // ─── Prompt builders ─────────────────────────────────────────────────────────
@@ -259,7 +288,7 @@ const PREV_STATE_BUDGET = 30000;
  *  frozen by the caller with the system prompt. Skipped on a first run: there
  *  is no earlier document to convert.
  */
-function buildUserMessage(scanText, reminderReason = '', formatChangeNote = '') {
+function buildUserMessage(scanText, reminderReason = '', formatChangeNote = '', ledgerSnapshot = '') {
     const settings = getSettings();
     const stored = getWorldStateText();
     const projected = settings.hookMode === 'off' ? stripHookSections(stored) : stored;
@@ -287,6 +316,7 @@ function buildUserMessage(scanText, reminderReason = '', formatChangeNote = '') 
         lines.push('');
         lines.push(`[REMINDER: Your previous attempt was rejected — ${reminderReason}. Output ONLY the structured document.]`);
     }
+    if (ledgerSnapshot) lines.push('', ledgerSnapshot, 'After the document, append the separate ledger report requested by the system prompt.');
     return lines.join('\n');
 }
 
@@ -326,7 +356,7 @@ const MAX_CATCH_UP_PASSES = 8;
  *   walk never passes it, nor the live stable-history end (a chat that shrank
  *   mid-replay shortens the walk instead of scanning stale indices)
  */
-function nextCatchUpChunk(from, endLimit) {
+function nextCatchUpChunk(from, endLimit, { withRecords = false } = {}) {
     const chat = getChat() || [];
     const end = Math.min(
         Number.isFinite(endLimit) ? Math.max(0, Math.floor(endLimit)) : Infinity,
@@ -334,6 +364,7 @@ function nextCatchUpChunk(from, endLimit) {
     );
     const start = Number.isFinite(from) ? Math.max(0, Math.min(Math.floor(from), end)) : end;
     const lines = [];
+    const records = [];
     let total = 0;
     let to = start;
     for (let i = start; i < end; i++) {
@@ -342,7 +373,9 @@ function nextCatchUpChunk(from, endLimit) {
         if (total + line.length > SCAN_MAX_CHARS) {
             if (lines.length === 0) {
                 console.warn(`[MWT:WorldState] Catch-up truncated message ${i} — at ${line.length} characters it alone exceeds the ${SCAN_MAX_CHARS}-character scan budget, so only its leading portion (with an explicit marker) can be scanned.`);
-                lines.push(line.slice(0, SCAN_MAX_CHARS - OVERSIZED_SCAN_NOTE.length) + OVERSIZED_SCAN_NOTE);
+                const suppliedLine = line.slice(0, SCAN_MAX_CHARS - OVERSIZED_SCAN_NOTE.length);
+                lines.push(suppliedLine + OVERSIZED_SCAN_NOTE);
+                if (withRecords) records.push(scanMessageRecord(chat[i], i, suppliedLine));
                 total += SCAN_MAX_CHARS + 1;
                 to = i + 1;
                 continue;
@@ -350,10 +383,11 @@ function nextCatchUpChunk(from, endLimit) {
             break;
         }
         lines.push(line);
+        if (withRecords) records.push(scanMessageRecord(chat[i], i, line));
         total += line.length + 1;
         to = i + 1;
     }
-    return { text: lines.join('\n'), from: start, to };
+    return { text: lines.join('\n'), records: persistScanRecords(records, chat), from: start, to };
 }
 
 /**
@@ -400,7 +434,7 @@ async function runCatchUpWorldStateRefresh(isAuto, since) {
                 console.warn(`[MWT:WorldState] Catch-up aborted — chat switched between passes (${scopeNow.reason}).`);
                 break;
             }
-            const chunk = nextCatchUpChunk(from, end);
+            const chunk = nextCatchUpChunk(from, end, { withRecords: !!buildLedgerRefreshSnapshot() });
             if (chunk.to <= from) {
                 // Cannot make progress (pathological budget geometry) — refuse
                 // WITHOUT advancing: the next refresh retries from here.
@@ -520,7 +554,15 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         const chat = getChat();
         if (!chat || chat.length === 0) return null;
 
-        const systemPrompt = buildSystemPrompt();
+        const ledgerSnapshot = buildLedgerRefreshSnapshot();
+        const systemPrompt = buildSystemPrompt() + (ledgerSnapshot ? `\n\n${LEDGER_REPORT_CONTRACT}` : '');
+        const measureGroup = ledgerSnapshot ? 'with-report' : 'without-report';
+        countLedgerDiagnostic(`refreshes:${measureGroup}`);
+        let validationFailed = false;
+        const noteValidationFailure = () => {
+            if (!validationFailed) countLedgerDiagnostic(`validation-failures:${measureGroup}`);
+            validationFailed = true;
+        };
         // Recorded with the commit so a later delta can tell which format
         // this document was written in. Captured with the prompt, not at the
         // write: a detail-level change saved mid-call must not be stamped onto
@@ -545,12 +587,16 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         // have shifted.
         let scanWindowText;
         let scanEnd;
+        let scanRecords;
         if (isCatchUpPass) {
             scanWindowText = typeof scanWindow.text === 'string' ? scanWindow.text : '';
             scanEnd = Math.max(0, Math.floor(scanWindow.to));
+            scanRecords = scanWindow.records ?? [];
         } else {
-            scanWindowText = getRecentMessagesForScan();
-            scanEnd = getStableHistoryEnd();
+            const window = getRecentMessagesForScan({ withRecords: true, collectRecords: !!ledgerSnapshot });
+            scanWindowText = window.text;
+            scanRecords = window.records;
+            scanEnd = window.to;
         }
 
         // TODO §1: the grounding gate's alias consultation — collected with
@@ -571,33 +617,37 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
         const _wsApi1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApi1.fetchFn({
             systemPrompt,
-            userContent: buildUserMessage(scanWindowText, '', formatChangeNote),
+            userContent: buildUserMessage(scanWindowText, '', formatChangeNote, ledgerSnapshot),
             settings: _wsApi1.settings,
             // Coordinator classification (TODO §1): a scheduled refresh is
             // background work the user-generation policy may hold; a button
             // press is foreground.
             trigger: isAuto ? 'auto' : 'manual',
         });
-        let rawModelText = normaliseOutput(result);
+        let ledgerReport = cutLedgerReport(result);
+        let rawModelText = normaliseOutput(ledgerReport.text);
         let text = rawModelText;
         if (getSettings().hookMode === 'off') text = stripHookSections(text);
         let validation = validateFullRefreshOutput(text);
         if (validation.ok) text = validation.text;
 
         if (!validation.ok) {
+            noteValidationFailure();
             logRejectedGeneratedOutput('First attempt', rawModelText, validation.reason, { retrying: true });
             const _wsApi2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await _wsApi2.fetchFn({
                 systemPrompt,
-                userContent: buildUserMessage(scanWindowText, validation.reason, formatChangeNote),
+                userContent: buildUserMessage(scanWindowText, validation.reason, formatChangeNote, ledgerSnapshot),
                 settings: _wsApi2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
-            rawModelText = normaliseOutput(result);
+            ledgerReport = cutLedgerReport(result);
+            rawModelText = normaliseOutput(ledgerReport.text);
             text = rawModelText;
             if (getSettings().hookMode === 'off') text = stripHookSections(text);
             validation = validateFullRefreshOutput(text);
             if (!validation.ok) {
+                noteValidationFailure();
                 logRejectedGeneratedOutput('Validation retry', rawModelText, validation.reason);
                 throw new Error(`Model output rejected after retry: ${validation.reason}`);
             }
@@ -640,15 +690,17 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
                 const _wsApi3 = resolveApiCall({ moduleSettings: getSettings() });
                 result = await _wsApi3.fetchFn({
                     systemPrompt,
-                    userContent: buildUserMessage(scanWindowText, grounding.reason, formatChangeNote),
+                    userContent: buildUserMessage(scanWindowText, grounding.reason, formatChangeNote, ledgerSnapshot),
                     settings: _wsApi3.settings,
                     trigger: isAuto ? 'auto' : 'manual',
                 });
-                rawModelText = normaliseOutput(result);
+                ledgerReport = cutLedgerReport(result);
+                rawModelText = normaliseOutput(ledgerReport.text);
                 text = rawModelText;
                 if (getSettings().hookMode === 'off') text = stripHookSections(text);
                 validation = validateFullRefreshOutput(text);
                 if (!validation.ok) {
+                    noteValidationFailure();
                     logRejectedGeneratedOutput('Grounding retry', rawModelText, validation.reason);
                     throw new Error(`Model output rejected after grounding retry: ${validation.reason}`);
                 }
@@ -723,6 +775,7 @@ export async function refreshWorldState(isAuto = false, { scanWindow = null } = 
             setStatus(state.modal, `Refresh failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error', 6000);
             return null;
         }
+        publishLedgerReport(ledgerReport, scanRecords, scopeBefore, !!ledgerSnapshot);
         state.autoSaveLastText = text;
         state.isDirty = false;
         state.editSessionActive = false;
@@ -849,7 +902,8 @@ export async function refreshWorldStateDelta(isAuto = false) {
     // cannot fit inside one scan budget, fall back to the full refresh rather
     // than silently skipping the oldest unseen events and stamping over the
     // gap.
-    const scanWindow = getMessagesSinceForScan(baselineStatus.lastRefreshAtMsg);
+    const ledgerSnapshot = buildLedgerRefreshSnapshot();
+    const scanWindow = getMessagesSinceForScan(baselineStatus.lastRefreshAtMsg, { withRecords: !!ledgerSnapshot });
     if (!scanWindow.ok) {
         console.warn(`[MWT:WorldState] Delta declined — ${scanWindow.reason}; a full refresh is required to cover the whole interval.`);
         if (isAuto) return refreshWorldState(isAuto);
@@ -863,7 +917,9 @@ export async function refreshWorldStateDelta(isAuto = false) {
     document.dispatchEvent(new CustomEvent('mwt:busy-changed'));
 
     try {
-        const systemPrompt = buildDeltaSystemPrompt(buildSystemPrompt());
+        const systemPrompt = buildDeltaSystemPrompt(buildSystemPrompt()) + (ledgerSnapshot ? `\n\n${LEDGER_REPORT_CONTRACT}` : '');
+        const measureGroup = ledgerSnapshot ? 'with-report' : 'without-report';
+        countLedgerDiagnostic(`refreshes:${measureGroup}`);
         const prevText = baselineText.trim();
         const promptPrevText = getSettings().hookMode === 'off'
             ? stripHookSections(prevText)
@@ -881,22 +937,25 @@ export async function refreshWorldStateDelta(isAuto = false) {
         const _wsApiD1 = resolveApiCall({ moduleSettings: getSettings() });
         let result = await _wsApiD1.fetchFn({
             systemPrompt,
-            userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text }),
+            userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text, ledgerSnapshot }),
             settings: _wsApiD1.settings,
             trigger: isAuto ? 'auto' : 'manual',
         });
-        let parsed = parseDeltaPatch(normaliseOutput(result));
+        let ledgerReport = cutLedgerReport(result);
+        let parsed = parseDeltaPatch(normaliseOutput(ledgerReport.text));
 
         if (!parsed.ok) {
+            countLedgerDiagnostic(`validation-failures:${measureGroup}`);
             console.warn(`[MWT:WorldState] Delta patch rejected: ${parsed.reason} — retrying once`);
             const _wsApiD2 = resolveApiCall({ moduleSettings: getSettings() });
             result = await _wsApiD2.fetchFn({
                 systemPrompt,
-                userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text, reminderReason: parsed.reason }),
+                userContent: buildDeltaUserMessage({ prevText: promptPrevText, recentText: scanWindow.text, ledgerSnapshot, reminderReason: parsed.reason }),
                 settings: _wsApiD2.settings,
                 trigger: isAuto ? 'auto' : 'manual',
             });
-            parsed = parseDeltaPatch(normaliseOutput(result));
+            ledgerReport = cutLedgerReport(result);
+            parsed = parseDeltaPatch(normaliseOutput(ledgerReport.text));
             if (!parsed.ok) throw new DeltaPatchError(`Model patch rejected after retry: ${parsed.reason}`);
         }
 
@@ -933,6 +992,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
                 console.warn(`[MWT:WorldState] Delta refresh (no changes) refused at the store write (${written.reason ?? 'unknown reason'}).`);
                 return null;
             }
+            publishLedgerReport(ledgerReport, scanWindow.records, scopeBefore, !!ledgerSnapshot);
             if (textChanged) {
                 state.autoSaveLastText = finalText;
                 state.isDirty = false;
@@ -962,11 +1022,15 @@ export async function refreshWorldStateDelta(isAuto = false) {
         // normalized here, preserving unrelated manual editor content.
         const deltaValidation = validateWorldStateDocument(finalText, { mode: 'structural' });
         if (!deltaValidation.ok) {
+            countLedgerDiagnostic(`document-validation-failures:${measureGroup}`);
             throw new DeltaPatchError(`Patched document rejected: ${deltaValidation.errors.map(entry => entry.message).join(' ')}`);
         }
         if (parsed.ops.some(operation => operation.section === 'Current Scene')) {
             const deltaContract = validateGeneratedDocument(finalText);
-            if (!deltaContract.ok) throw new DeltaPatchError(`Patched document rejected: ${deltaContract.reason}`);
+            if (!deltaContract.ok) {
+                countLedgerDiagnostic(`document-validation-failures:${measureGroup}`);
+                throw new DeltaPatchError(`Patched document rejected: ${deltaContract.reason}`);
+            }
             finalText = deltaContract.text;
         }
 
@@ -1043,6 +1107,7 @@ export async function refreshWorldStateDelta(isAuto = false) {
             setStatus(state.modal, `Delta refresh failed: the world state store refused the write (${written.reason ?? 'unknown reason'}); the previous world state was kept.`, 'error', 6000);
             return null;
         }
+        publishLedgerReport(ledgerReport, scanWindow.records, scopeBefore, !!ledgerSnapshot);
         state.autoSaveLastText = finalText;
         state.isDirty = false;
         state.editSessionActive = false;

@@ -103,7 +103,7 @@ describe('modal accessibility lifecycle', () => {
     });
 
     test('opening moves focus into the dialog', () => {
-        // §6.2 (docs/accessibility_plan.md): explicit focus-on-open
+        // §6.2 (archive/completed_plans/accessibility_plan.md): explicit focus-on-open
         // assertion. focusIntoModal picks the first focusable control in the
         // panel — the × button, first in DOM order — so keyboard and AT users
         // land inside the dialog, never on the opener or the body behind it.

@@ -55,6 +55,46 @@ export function quoteMatchesMessage(needle, needleBigrams, message, { allowInter
     return hits / expected.length >= BIGRAM_MATCH_THRESHOLD;
 }
 
+export const QUOTE_CONTEXT_CHAR_LIMIT = 300;
+
+/** Sentences end at terminal punctuation (plus closing quotes, brackets or
+ * emphasis marks) followed by whitespace, and at line breaks. */
+function splitSentences(value) {
+    return String(value || '')
+        .replace(/([.!?…]+["'”’»)\]*_~]*)\s+/gu, '$1\u0000')
+        .split(/\u0000|\r?\n+/)
+        .map(part => part.replace(/\s+/g, ' ').trim())
+        .filter(part => normalizeForMatch(part));
+}
+
+/**
+ * Verbatim context for a quote that matched `source` strictly: the sentences
+ * containing it, widened by whole neighbouring sentences (earlier first) while
+ * the excerpt fits `limit`. Null when the quote cannot be located contiguously,
+ * its own sentences exceed the limit, or the excerpt would add nothing.
+ */
+export function excerptAroundQuote(source, quote, { limit = QUOTE_CONTEXT_CHAR_LIMIT } = {}) {
+    const needle = normalizeForMatch(quote);
+    if (!needle) return null;
+    const parts = splitSentences(stripNonNarrative(source, { preserveOffScreen: false }));
+    const normalized = parts.map(normalizeForMatch);
+    const contains = (from, to) => normalized.slice(from, to + 1).join(' ').includes(needle);
+    const length = (from, to) => parts.slice(from, to + 1).join(' ').length;
+    let end = 0;
+    while (end < parts.length && !contains(0, end)) end++;
+    if (end === parts.length) return null;
+    let start = end;
+    while (start > 0 && !contains(start, end)) start--;
+    if (length(start, end) > limit) return null;
+    for (let grew = true; grew;) {
+        grew = false;
+        if (start > 0 && length(start - 1, end) <= limit) { start--; grew = true; }
+        if (end < parts.length - 1 && length(start, end + 1) <= limit) { end++; grew = true; }
+    }
+    const excerpt = parts.slice(start, end + 1).join(' ');
+    return normalizeForMatch(excerpt) === needle ? null : excerpt;
+}
+
 /** Return the matching chat-array index, or -1 when the excerpt is unverifiable. */
 export function findQuoteMatch(quote, messageIndex, chat, options = {}) {
     if (!Array.isArray(chat)) return -1;

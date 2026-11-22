@@ -607,6 +607,12 @@ describe('schema modules stay pure', () => {
         'knowledge/schema.js',
         'story_planner/schema.js',
         'interiority/schema.js',
+        'calendar/schema.js',
+        'ambient/schema.js',
+        // The calendar schema reuses validateCalendarRecord() instead of
+        // restating the rules, so the module that owns them is swept too: it
+        // must stay an import-free, host-free leaf for that reuse to be pure.
+        'core/calendar_math.js',
     ];
 
     test('no schema module imports a barrel, a host module, or another feature file', () => {
@@ -617,16 +623,22 @@ describe('schema modules stay pure', () => {
             // must have at least one allowed import for this sweep to be real.
             // Part 7: core-level pure schema modules (core/settings_schema.js)
             // may import the same-layer engine ('./schema.js'); schema/secondary.js
-            // joins the registry/manifest set.
+            // joins the registry/manifest set. A module schema may also import
+            // core/calendar_math.js — a pure rules leaf swept by this same test.
             const specifiers = [...text.matchAll(/(?:from\s|import\s)['"]([^'"]+)['"]/g)].map(match => match[1]);
             checkedImports += specifiers.length;
             for (const specifier of specifiers) {
                 expect(specifier, `${file} imports ${specifier}`).toMatch(
-                    /^(\.\/(?:schema|quarantine)\.js|\.\.\/core\/(?:schema|quarantine)\.js|\.\.\/(?:world_state|chronicle|knowledge|story_planner|interiority)\/schema\.js|\.\/(?:registry|manifest|secondary)\.js)$/,
+                    /^(\.\/(?:schema|quarantine)\.js|\.\.\/core\/(?:schema|quarantine|calendar_math)\.js|\.\.\/(?:world_state|chronicle|knowledge|story_planner|interiority|calendar|ambient|ledger)\/schema\.js|\.\/(?:registry|manifest|secondary)\.js)$/,
                 );
             }
         }
         expect(checkedImports).toBeGreaterThan(0);
+    });
+
+    test('core/calendar_math.js stays import-free (the calendar schema imports it)', () => {
+        const text = readFileSync(fileURLToPath(new URL('../core/calendar_math.js', import.meta.url)), 'utf8');
+        expect([...text.matchAll(/(?:from\s|import\s)['"]([^'"]+)['"]/g)]).toEqual([]);
     });
 
     test('no schema module touches DOM or SillyTavern globals', () => {

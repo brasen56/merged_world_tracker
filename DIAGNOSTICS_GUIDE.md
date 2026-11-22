@@ -54,7 +54,7 @@ tab.
 |---|---|
 | ❤️ **Health** | "Is anything broken right now?" One row per module: is it on, may it inject, when did it last run, and did that run succeed? |
 | 🌐 **Environment** | "Which SillyTavern am I on, and does it have everything MWT needs?" Matters most on customized ("fork") builds. |
-| 🗂️ **Scope & storage** | "Which lorebooks is this chat using, and why?" The go-to for "my data is weird across chats". |
+| 🗂️ **Scope & storage** | "Which lorebooks is this chat using, and why?" The go-to for "my data is weird across chats". Also: "How full is browser storage, and how much of it is MWT's?" |
 | 💉 **Injection** | "What is MWT putting in the narrator's prompt, where, and why?" |
 | 📡 **Last request** | "What did the last AI call look like?" Duration, retries, status, token usage — never the prompt text itself. |
 | 📋 **Log** | "What has MWT been doing this session?" A timeline, newest first. |
@@ -99,6 +99,7 @@ private report to the developer, paste as-is.
 | "Token counts look wrong" | 🌐 Environment + ❤️ Health | Environment shows whether a real tokenizer answered; Health shows each module's estimated token load. |
 | "I'm on a fork / custom SillyTavern build" | 🌐 Environment | States the compatibility verdict — include it in every report from that build. |
 | "Knowledge won't create entries / writes fail" | 🗂️ Scope & storage, 🌐 Environment | Scope flags an unloaded store (its one red finding); Environment shows SillyTavern's world-info module state. |
+| "Restore history lost older versions" or "MWT says browser storage is full" | 🗂️ Scope & storage | The storage meter shows how full browser storage is (against an approximate ~5,000,000-character limit) and which MWT key family holds it — usually Knowledge Restore history. It keeps at most 10 versions per NPC and stays under a 3,000,000-character budget, trimming its oldest versions past that and again if storage fills anyway. |
 
 **Overwhelmed? Just press 📋 Copy Report and paste it.** The report contains
 all of these sections anyway.
@@ -197,4 +198,6 @@ the report — is redacted by default, exactly like the panel.
 - [`DIAGNOSTICS_CONSOLE_GUIDE.md`](DIAGNOSTICS_CONSOLE_GUIDE.md) — the full
   per-command reference: every column of every table explained, plus the
   privacy model in detail.
-- [`README.md`](README.md) — everything else about MWT.
+- [`README.md`](README.md) — the short overview, with links to every guide.
+- [`USER_GUIDE.md`](USER_GUIDE.md) — everything else about MWT: every module,
+  feature, and setting with its default.

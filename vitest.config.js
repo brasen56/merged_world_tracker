@@ -16,7 +16,12 @@ export default defineConfig({
         // Look for files ending in .test.js anywhere under the project root.
         include: ['**/*.test.js'],
         // Never run tests against installed dependencies or build output.
-        exclude: ['node_modules/**', 'dist/**', 'coverage/**'],
+        // The `**/` prefix is required: `node_modules/**` alone is root-only,
+        // so .test.js files shipped inside dependencies (tsconfig-paths has
+        // seven) were being collected and failing. `.claude/**` keeps git
+        // worktrees parked under .claude/worktrees/ out of the run — each is
+        // a full repo checkout whose tests belong to another branch.
+        exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**', '**/.claude/**'],
         // Run tests in the Node environment (not the browser). Most of the
         // testable code in this extension is pure logic that doesn't need a
         // DOM; when a test does need browser globals, we stub them locally.

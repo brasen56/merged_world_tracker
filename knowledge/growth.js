@@ -44,8 +44,9 @@ import {
 // Direct import (not the barrel) so the REAL scope module is read under the
 // test barrel→stub alias.
 import { scopeStillCurrent } from '../core/scope.js';
-import { getOrCreateReceiptIdentity } from '../core/message_identity.js';
+import { getOrCreateReceiptIdentity, getReceiptIdentity } from '../core/message_identity.js';
 import { verifyGrowthObservations } from './growth_sources.js';
+import { buildProfileEvidenceView, formatProfileEvidence, formatConsolidationEvidence } from './growth_timeline.js';
 // Part 6 (§7.4) pause guard for the Growth profiler's direct entry points.
 // Direct import (not the barrel) so the REAL pause singleton is read even under
 // the test barrel→stub alias — the same rule knowledge/index.js applies to its
@@ -58,7 +59,7 @@ import { flushBook } from './store.js';
 import { getLorebookName } from './scope.js';
 import {
     appendRawObservations, getEvidenceForProfile, stampProfileGenerated,
-    hasEvidenceFile,
+    hasEvidenceFile, getEvidenceFile,
     getRawForConsolidation, applyConsolidation,
     getUserOverrides,
     getCaptureWatermark, getCaptureCursor, setCaptureWatermark,
@@ -66,6 +67,13 @@ import {
 } from './evidence.js';
 import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
 import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
+
+/** Growth is a leaf: capture may read facts and canon, never identity prose. */
+export function stripCaptureIdentityLines(content) {
+    return String(content ?? '').split(/\r?\n/)
+        .filter(line => !/^\s*(?:Personality|Voice|Tone|Perceived as)\s*:/i.test(line))
+        .join('\n');
+}
 
 // ─── Part 6 pause guard (§7.4) ────────────────────────────────────────────────
 
@@ -246,16 +254,15 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
     const messages = captureWindow?.text;
     if (!messages) throw new Error('No recent messages to analyze.');
 
-    // Load the existing entry as identity/context — NOT as a source of
-    // observations. The evidence prompt explicitly instructs the model to
-    // extract observations from <messages> only.
+    // Load factual/canon context only, stripping identity prose structurally.
+    // The prompt also restricts observation sources to <messages>.
     let existingContext = '';
     if (uid != null) {
         try {
             // Label-verified: a stale uid must not feed another NPC's dossier
             // in as identity context for evidence capture.
             const content = await loadEntryContent(uid, name);
-            if (content) existingContext = content;
+            if (content) existingContext = stripCaptureIdentityLines(content);
         } catch { /* ignore load errors */ }
     }
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during capture — result discarded.');
@@ -342,11 +349,8 @@ export async function generateProfile(name, observations, canon) {
     // observation includes its category, distilled claim, and the verbatim
     // quote receipt. Canon-flagged observations (user-promoted, authoritative)
     // are marked so the generator knows they outrank inference.
-    const evidenceText = observations.map((o, i) => {
-        const canonTag = o.canon ? ' [CANON]' : '';
-        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
-        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
-    }).join('\n');
+    const evidenceText = formatProfileEvidence(buildProfileEvidenceView(getEvidenceFile(name, false)
+        || { raw: observations }));
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -393,11 +397,8 @@ export async function generatePsychoanalyzeProfile(name, observations, curatedEn
     }
 
     // Format the evidence as a readable list (same format as generateProfile).
-    const evidenceText = observations.map((o, i) => {
-        const canonTag = o.canon ? ' [CANON]' : '';
-        const tierTag = o.tier === 'consolidated' ? ' [consolidated]' : '';
-        return `${i + 1}. [${o.category}]${canonTag}${tierTag} ${o.claim}\n   Quote: "${o.quote}"${o.msgIdx != null ? ` (msg ${o.msgIdx})` : ''}`;
-    }).join('\n');
+    const evidenceText = formatProfileEvidence(buildProfileEvidenceView(getEvidenceFile(name, false)
+        || { raw: observations }));
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -745,9 +746,7 @@ export async function consolidateEvidence(name) {
     const sourceIds = rawForCon.map(o => o.id);
 
     // Format raw observations with their numeric IDs for the consolidator.
-    const rawText = rawForCon.map(o => {
-        return `[${o.numericId}] [${o.category}] ${o.claim}\n   Quote: "${o.quote}"`;
-    }).join('\n');
+    const rawText = formatConsolidationEvidence(getEvidenceFile(name, false), rawForCon);
 
     const userContent = [
         `<target_npc>${name}</target_npc>`,
@@ -898,9 +897,7 @@ function buildDeltaWindow(sinceTs, maxMessages = DELTA_MAX_MESSAGES, minMessages
         sinceIndex = -1;
         for (let i = 0; i < getEligibleChatEnd(chat); i++) {
             const msg = chat[i];
-            const identity = msg?.id != null ? `id:${msg.id}`
-                : msg?.extra?.mesid != null ? `mesid:${msg.extra.mesid}`
-                    : msg?.extra?.mwt_uuid ? `uuid:${msg.extra.mwt_uuid}` : null;
+            const identity = getReceiptIdentity(msg);
             if (identity === sinceCursor.identity) { sinceIndex = i; break; }
         }
         // If the boundary itself was removed, replay surviving equal-time
@@ -1013,7 +1010,7 @@ export async function runContinuousCapture(name, opts = {}) {
     try {
         // Label-verified: identity context must be THIS NPC's entry.
         const content = await loadEntryContent(uid, name);
-        if (content) existingContext = content;
+        if (content) existingContext = stripCaptureIdentityLines(content);
     } catch { /* ignore */ }
 
     if (!scopeStillCurrent(scopeBefore).ok) return null;
@@ -1301,7 +1298,7 @@ export async function runIlsBackfillCapture(name, opts = {}) {
     try {
         // Label-verified: identity context must be THIS NPC's entry.
         const content = await loadEntryContent(uid, name);
-        if (content) existingContext = content;
+        if (content) existingContext = stripCaptureIdentityLines(content);
     } catch { /* ignore */ }
 
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');

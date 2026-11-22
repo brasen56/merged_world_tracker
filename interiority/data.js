@@ -70,47 +70,8 @@ import { interioritySchema, INTENTION_PRIORITIES } from './schema.js';
 // secondary-persistence vocabulary (direct import, not the barrel).
 import { isValidMessageUuid, MESSAGE_UUID_EXTRA_KEY, SECONDARY_ISSUE_CODES } from '../schema/secondary.js';
 
-// ─── Aikobots v4 sparse-chat detection ───────────────────────────────────────
-//
-// The fork moved chat storage to SQLite with bounded range reads. The client
-// chat array keeps the full logical .length, but only loaded ranges are
-// hydrated; older slots are holes (undefined) until a background prefetch or
-// history navigation fills them. Full-array scans (orphan cleanup, key
-// migration) must be deferred until the chat is fully hydrated to avoid
-// mass-deleting entries that reference unhydrated messages.
-//
-// isChatFullyHydrated() is exported from script.js on the fork. On upstream ST
-// it doesn't exist, so isChatHydrated() always returns true (fully hydrated).
-
-let _isChatFullyHydratedFn = null;
-let _isChatFullyHydratedChecked = false;
-
-/**
- * Lazy-load and cache the fork's isChatFullyHydrated function.
- * @returns {function|null}
- */
-async function getHydrationChecker() {
-    if (_isChatFullyHydratedChecked) return _isChatFullyHydratedFn;
-    _isChatFullyHydratedChecked = true;
-    try {
-        const stScript = await import('../../../../../script.js');
-        if (typeof stScript?.isChatFullyHydrated === 'function') {
-            _isChatFullyHydratedFn = stScript.isChatFullyHydrated;
-        }
-    } catch { /* upstream ST — no hydration concept */ }
-    return _isChatFullyHydratedFn;
-}
-
-/**
- * Returns true if the chat is fully hydrated (all messages loaded).
- * On upstream ST (no isChatFullyHydrated export), always returns true.
- * @returns {Promise<boolean>}
- */
-export async function isChatHydrated() {
-    const checker = await getHydrationChecker();
-    if (!checker) return true; // upstream ST — always hydrated
-    try { return checker(); } catch { return true; }
-}
+import { isChatHydrated } from '../core/chat_hydration.js';
+export { isChatHydrated };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -1656,7 +1617,33 @@ export function setPerMessage(msgKey, entry) {
     if (!msgKey) return;
     const data = getInteriorityData();
     data.perMessage[msgKey] = entry;
+    // Records written before the rollback point existed each hold a full copy
+    // of the lifecycle history (about 68K at the cap, on every message). Shrink
+    // them here, on a write that is already saving the store.
+    for (const stored of Object.values(data.perMessage)) {
+        if (Array.isArray(stored?.lifecycleHistorySnapshot)) {
+            stored.lifecycleHistorySnapshot = lifecycleRollbackPoint(stored.lifecycleHistorySnapshot);
+        }
+    }
     saveInteriorityData(data);
+}
+
+/**
+ * Where the lifecycle history ended, for a perMessage rollback record. The
+ * history only ever grows at its end, so "everything after this record" names
+ * what a later rollback must undo without storing the records themselves.
+ * `lastAt` finds the same place when the record itself is gone (trimmed by the
+ * retention cap, cleared, or quarantined).
+ *
+ * @param {Array<object>} history
+ * @returns {{lastId: string|null, lastAt: number|null}}
+ */
+export function lifecycleRollbackPoint(history) {
+    const last = Array.isArray(history) && history.length ? history[history.length - 1] : null;
+    return {
+        lastId: typeof last?.id === 'string' ? last.id : null,
+        lastAt: Number.isFinite(last?.at) ? last.at : null,
+    };
 }
 
 /**
@@ -1738,8 +1725,8 @@ export async function migrateIndexKeys(privileged = null) {
     // the full logical .length but only loaded ranges are hydrated. Iterating
     // the array before full hydration would make every unhydrated message look
     // absent, causing migration to drop entries that reference valid messages.
-    // Defer migration until the chat is fully hydrated. On upstream ST,
-    // isChatHydrated() always returns true.
+    // Defer migration until the chat is fully hydrated. Without a host checker,
+    // the shared guard still verifies that no unloaded slots remain.
     if (!(await isChatHydrated())) {
         console.log('[MWT:Interiority] Key migration deferred — chat not fully hydrated yet.');
         return 0;

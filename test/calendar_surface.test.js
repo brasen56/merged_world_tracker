@@ -34,6 +34,21 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); document.body.innerHTML = ''; });
 
 describe('Phase 12 date facts and lifecycle', () => {
+    test('all calendar fields use shared MWT theming, including newly added month lengths', () => {
+        mount();
+        const expectThemedFields = () => {
+            const fields = document.querySelectorAll('#mwt-calendar-panel input:not([type="checkbox"]), #mwt-calendar-panel select, #mwt-calendar-panel textarea');
+            expect(fields.length).toBeGreaterThan(0);
+            for (const field of fields) {
+                expect(field.classList.contains('mwt-input'), field.id || field.getAttribute('aria-label')).toBe(true);
+            }
+        };
+        expectThemedFields();
+        el('add').click();
+        expect(el('months').querySelectorAll('input[type="number"]')).toHaveLength(3);
+        expectThemedFields();
+    });
+
     test('date, tomorrow, era omission and exact month boundary gate', () => {
         expect(calendarCommand()).toContain('5 days remain in Highsun; the next month is Deepnight');
         expect(calendarCommand()).toContain('tomorrow is Starday, Highsun 32, 1247');

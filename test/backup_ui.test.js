@@ -20,6 +20,7 @@ import {
     SECTION_ORDER,
     SECTION_LABELS,
 } from '../backup/render.js';
+import { SECTION_KEYS } from '../backup/data.js';
 
 function mergeSummary(overrides = {}) {
     return { added: 0, updated: 0, skipped: [], conflicts: 0, ...overrides };
@@ -164,6 +165,16 @@ describe('buildRestoreModes', () => {
 
     test('unknown mode values are dropped (never silently coerced)', () => {
         expect(buildRestoreModes({ worldState: 'nuke', knowledgeCounters: null })).toEqual({});
+        expect(buildRestoreModes({ calendar: 'merge', ambient: 'nuke' })).toEqual({});
+    });
+
+    test('whole-record stores pass explicit choices through like World State', () => {
+        expect(buildRestoreModes({ calendar: 'keep', ambient: 'replace', ledger: 'keep' })).toEqual({
+            calendar: 'keep',
+            ambient: 'replace',
+            ledger: 'keep',
+        });
+        expect(buildRestoreModes({ calendar: '', ambient: '' })).toEqual({});
     });
 });
 
@@ -172,6 +183,9 @@ describe('readRestoreControlValues', () => {
         const map = {
             '#mwt-bk-ws-mode': { value: values.worldState ?? '' },
             '#mwt-bk-counters-mode': { value: values.knowledgeCounters ?? '' },
+            '#mwt-bk-calendar-mode': { value: values.calendar ?? '' },
+            '#mwt-bk-ambient-mode': { value: values.ambient ?? '' },
+            '#mwt-bk-ledger-mode': { value: values.ledger ?? '' },
             '#mwt-bk-session-config': { checked: !!values.restoreSessionConfig },
             '#mwt-bk-exact': { checked: !!values.exact },
         };
@@ -180,11 +194,15 @@ describe('readRestoreControlValues', () => {
 
     test('reads the control values into the plain-values shape', () => {
         const v = readRestoreControlValues(fakeRoot({
-            worldState: 'keep', knowledgeCounters: 'replace', restoreSessionConfig: true, exact: true,
+            worldState: 'keep', knowledgeCounters: 'replace', calendar: 'keep', ambient: 'replace', ledger: 'keep',
+            restoreSessionConfig: true, exact: true,
         }));
         expect(v).toEqual({
             worldState: 'keep',
             knowledgeCounters: 'replace',
+            calendar: 'keep',
+            ambient: 'replace',
+            ledger: 'keep',
             restoreSessionConfig: true,
             exact: true,
         });
@@ -195,6 +213,9 @@ describe('readRestoreControlValues', () => {
         expect(v).toEqual({
             worldState: '',
             knowledgeCounters: '',
+            calendar: '',
+            ambient: '',
+            ledger: '',
             restoreSessionConfig: false,
             exact: false,
         });
@@ -222,6 +243,11 @@ describe('formatSectionChangeBits', () => {
             mode: 'exact', action: 'unchanged', replaced: 0, removed: 0, unchanged: 1, skipped: [], conflicts: 0,
         });
         expect(formatSectionChangeBits(unchanged)).toEqual([{ text: 'unchanged', tone: 'normal' }]);
+        // A store an older backup never covered is kept, not removed.
+        const kept = describeSectionSummary('calendar', {
+            mode: 'exact', action: 'kept', replaced: 0, removed: 0, unchanged: 1, skipped: [], conflicts: 0,
+        });
+        expect(formatSectionChangeBits(kept)).toEqual([{ text: 'kept (this older backup does not include it)', tone: 'normal' }]);
     });
 
     test('merge-mode counts, skips, and conflicts carry their tones', () => {
@@ -277,7 +303,8 @@ describe('SECTION_ORDER / SECTION_LABELS', () => {
         for (const name of SECTION_ORDER) {
             expect(SECTION_LABELS[name]).toBeTruthy();
         }
-        // The seven backup sections from data.js SECTION_KEYS.
-        expect(SECTION_ORDER).toHaveLength(7);
+        // Exactly the backup sections from data.js SECTION_KEYS: a section
+        // missing here is silently left out of the restore preview.
+        expect([...SECTION_ORDER].sort()).toEqual([...SECTION_KEYS].sort());
     });
 });

@@ -20,7 +20,8 @@ import {
     resolveSafeCharacterContextEntities,
 } from '../core/index.js';
 import { collectBackup } from './collect.js';
-import { backupDataEqual, cloneBackupData, METADATA_KEYS } from './data.js';
+import { refreshInjection as refreshLedgerInjection } from '../ledger/index.js';
+import { backupDataEqual, cloneBackupData, getEnvelopeMetadataSections, METADATA_KEYS } from './data.js';
 import { planRestore } from './restore.js';
 import {
     getStoredStoreVersion,
@@ -54,14 +55,15 @@ import {
     flushBook,
     getStoreQuarantineItems,
     isHydrated,
-    isStoreEntry,
     mergeStoreQuarantineItems,
     restoreStoreState,
     STORE_VERSION,
     withStoreLock,
     _writeFieldDirect,
 } from '../knowledge/store.js';
-import { isCleanupRecoveryEntry, mergeCleanupRecoveryRecordsUnlocked } from '../knowledge/cleanup_recovery.js';
+import { mergeCleanupRecoveryRecordsUnlocked } from '../knowledge/cleanup_recovery.js';
+import { isInternalEntry } from '../knowledge/internal_entries.js';
+import { mergeGrowthHistoryRecordsUnlocked } from '../knowledge/growth_history.js';
 import { getLorebookName, getStateLorebookName } from '../knowledge/scope.js';
 import { state as knowledgeState } from '../knowledge/state.js';
 import { findDestinationEntryUid } from '../knowledge/reconcile.js';
@@ -205,8 +207,7 @@ function identityMatches(a, b) {
 }
 
 function hasLiveDestinationUid(entries, uid) {
-    if (uid !== null && uid !== undefined && entries?.[uid] && !isStoreEntry(entries[uid])
-        && !isCleanupRecoveryEntry(entries[uid])) return true;
+    if (uid !== null && uid !== undefined && entries?.[uid] && !isInternalEntry(entries[uid])) return true;
     return false;
 }
 
@@ -644,7 +645,7 @@ export async function previewRestore(envelope, { modes = {}, exact = false, scop
     };
 }
 
-function exactSectionSummary(current, imported, sectionName, { blocked = false } = {}) {
+function exactSectionSummary(current, imported, sectionName, { blocked = false, covered = true } = {}) {
     // §3.5: a destination section whose CURRENT half refused preparation is
     // untouchable — the exact write must neither replace it with the import
     // nor remove it, so the summary reports it as blocked instead of
@@ -654,6 +655,12 @@ function exactSectionSummary(current, imported, sectionName, { blocked = false }
     }
     const hasCurrent = Object.prototype.hasOwnProperty.call(current, sectionName);
     const hasImported = Object.prototype.hasOwnProperty.call(imported, sectionName);
+    if (!hasImported && !covered) {
+        // The backup predates this store (getEnvelopeMetadataSections): it says
+        // nothing about it, so the exact write leaves the destination's copy
+        // alone instead of removing it.
+        return { mode: 'exact', action: hasCurrent ? 'kept' : 'unchanged', replaced: 0, removed: 0, unchanged: 1, skipped: [], conflicts: 0 };
+    }
     if (!hasImported) {
         return { mode: 'exact', action: hasCurrent ? 'removed' : 'unchanged', replaced: 0, removed: hasCurrent ? 1 : 0, unchanged: hasCurrent ? 0 : 1, skipped: [], conflicts: 0 };
     }
@@ -723,6 +730,11 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
     // future-version destination must not be DELETED by the exact restore
     // either — check them with the same preparation the planner uses (§3.5).
     const currentVersions = collectCurrentVersions();
+    // Sections the backup COVERS (its exporter enumerated them). A section
+    // absent from an older backup because that build did not know the store
+    // (Calendar, Ambient) is neither a removal candidate nor written: the
+    // exact write keeps the destination's copy.
+    const coveredSections = getEnvelopeMetadataSections(envelope);
     // Removal-only blocked sections have no merge summary that could carry
     // their refusal, so their display-safe reasons are collected here and
     // attached to the exact summary below.
@@ -730,6 +742,7 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
     for (const sectionName of METADATA_SECTION_NAMES) {
         if (blockedSections.includes(sectionName)) continue;
         if (Object.prototype.hasOwnProperty.call(imported, sectionName)) continue;
+        if (!coveredSections.includes(sectionName)) continue;
         const skipped = destinationSectionBlockedSkipped(sectionName, current[sectionName], currentVersions);
         if (skipped.length > 0) {
             blockedSections.push(sectionName);
@@ -759,6 +772,9 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
         sections,
         removeMetadataSections: METADATA_SECTION_NAMES
             .filter(sectionName => !Object.prototype.hasOwnProperty.call(imported, sectionName))
+            // Only a store the backup covers can be absent ON PURPOSE; one an
+            // older exporter never knew is kept (getEnvelopeMetadataSections).
+            .filter(sectionName => coveredSections.includes(sectionName))
             // A blocked destination section is never removed either — removal
             // is still a write to a store the planner refused to touch.
             .filter(sectionName => !blockedSections.includes(sectionName)),
@@ -783,7 +799,10 @@ async function previewExactRestore(envelope, { modes = {}, scope = null } = {}) 
     };
     for (const sectionName of METADATA_SECTION_NAMES) {
         const isBlocked = blockedSections.includes(sectionName);
-        const exactSummary = exactSectionSummary(current, imported, sectionName, { blocked: isBlocked });
+        const exactSummary = exactSectionSummary(current, imported, sectionName, {
+            blocked: isBlocked,
+            covered: coveredSections.includes(sectionName),
+        });
         // §3.5: a blocked destination's refusal reasons ride the exact summary
         // too, so the confirmation explains why the section is left untouched.
         // Merge-planner-blocked sections already carry theirs in the merge
@@ -1259,6 +1278,10 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         };
     }
 
+    // Ledger is static context (no per-generation rebuild). Restore and undo
+    // must replace its registered prompt too, but never touch a switched chat.
+    if (assertRestoreScope(scope, exact).ok) refreshLedgerInjection('backup-restored');
+
     // ── D3 (concision plan): cleanup-recovery merge ────────────────────────
     //
     // The envelope's cleanup-recovery records merge into the destination
@@ -1270,6 +1293,16 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
     // recovery manager), so the result carries a warning instead. Unlocked
     // merge: commitRestore already runs under withStoreLock, which is a queue
     // — nesting would deadlock.
+    let growthHistoryMerge;
+    const importedGrowthHistory = commitPreview.validation?.growthHistory;
+    if (importedGrowthHistory && Object.keys(importedGrowthHistory.records).length > 0) {
+        try {
+            growthHistoryMerge = await mergeGrowthHistoryRecordsUnlocked(importedGrowthHistory.records,
+                cleanupRecoveryBook, { assertCurrent: assertCleanupRecoveryCurrent });
+        } catch (err) {
+            growthHistoryMerge = { ok: false, error: err?.message || String(err) };
+        }
+    }
     let cleanupRecoveryMerge;
     const importedCleanupRecovery = commitPreview.validation?.cleanupRecovery;
     if (importedCleanupRecovery && Object.keys(importedCleanupRecovery.records || {}).length > 0) {
@@ -1292,6 +1325,7 @@ async function commitRestore(envelope, { makePreview, modes, scope, previewToken
         preview: commitPreview,
         preRestoreBackup,
         ...(cleanupRecoveryMerge !== undefined ? { cleanupRecovery: cleanupRecoveryMerge } : {}),
+        ...(growthHistoryMerge !== undefined ? { growthHistory: growthHistoryMerge } : {}),
     };
 }
 

@@ -42,11 +42,11 @@ export function renderCalendarPanel() {
             <label>ID <input class="mwt-input" id="mwt-c-event-id" maxlength="64"></label>
             <label>Name <input class="mwt-input" id="mwt-c-event-name" maxlength="24"></label>
             <label>Repeat <select class="mwt-input" id="mwt-c-event-repeat"><option value="none">Once</option><option value="yearly">Yearly</option><option value="every">Every N years</option><option value="new">New moon</option><option value="full">Full moon</option></select></label>
-            <label>Every N years <input type="number" id="mwt-c-event-every" min="2" max="99" value="2"></label>
-            <label>Year (first occurrence) <input type="number" id="mwt-c-event-year" min="1" max="9999"></label>
-            <label>Month <input type="number" id="mwt-c-event-month" min="1" max="24" value="1"></label>
-            <label>Day <input type="number" id="mwt-c-event-day" min="1" max="40" value="1"></label>
-            <label>Duration in days <input type="number" id="mwt-c-event-duration" min="1" max="14" value="1"></label>
+            <label>Every N years <input class="mwt-input" type="number" id="mwt-c-event-every" min="2" max="99" value="2"></label>
+            <label>Year (first occurrence) <input class="mwt-input" type="number" id="mwt-c-event-year" min="1" max="9999"></label>
+            <label>Month <input class="mwt-input" type="number" id="mwt-c-event-month" min="1" max="24" value="1"></label>
+            <label>Day <input class="mwt-input" type="number" id="mwt-c-event-day" min="1" max="40" value="1"></label>
+            <label>Duration in days <input class="mwt-input" type="number" id="mwt-c-event-duration" min="1" max="14" value="1"></label>
             <button type="button" class="mwt-btn" id="mwt-c-event-apply">Apply event to draft</button>
             <button type="button" class="mwt-btn" id="mwt-c-event-new">New event</button>
         </fieldset>
@@ -59,14 +59,14 @@ export function renderCalendarPanel() {
             <label>ID <input class="mwt-input" id="mwt-c-phen-id" maxlength="64"></label>
             <label>Name <input class="mwt-input" id="mwt-c-phen-name" maxlength="60"></label>
             <label>Clause <input class="mwt-input" id="mwt-c-phen-clause" maxlength="80"></label>
-            <label>Start year <input type="number" id="mwt-c-phen-year" min="1" max="9999"></label>
-            <label>Start month <input type="number" id="mwt-c-phen-month" min="1" max="24"></label>
-            <label>Start day <input type="number" id="mwt-c-phen-day" min="1" max="40"></label>
-            <label>Duration <input type="number" id="mwt-c-phen-duration" min="1" max="400"></label>
-            <label>Unit <select id="mwt-c-phen-unit"><option value="durationDays">Days (1–400)</option><option value="durationMonths">Calendar months (1–13; destination day clamps)</option></select></label>
-            <label>Repeat <select id="mwt-c-phen-repeat"><option value="none">Once</option><option value="yearly">Yearly</option></select></label>
-            <label>Light (only darkens) <select id="mwt-c-phen-light"><option value="">No override</option><option>daylight</option><option>twilight</option><option>darkness</option></select></label>
-            <label>Priority <input type="number" id="mwt-c-phen-priority" min="-100" max="100"></label>
+            <label>Start year <input class="mwt-input" type="number" id="mwt-c-phen-year" min="1" max="9999"></label>
+            <label>Start month <input class="mwt-input" type="number" id="mwt-c-phen-month" min="1" max="24"></label>
+            <label>Start day <input class="mwt-input" type="number" id="mwt-c-phen-day" min="1" max="40"></label>
+            <label>Duration <input class="mwt-input" type="number" id="mwt-c-phen-duration" min="1" max="400"></label>
+            <label>Unit <select class="mwt-input" id="mwt-c-phen-unit"><option value="durationDays">Days (1–400)</option><option value="durationMonths">Calendar months (1–13; destination day clamps)</option></select></label>
+            <label>Repeat <select class="mwt-input" id="mwt-c-phen-repeat"><option value="none">Once</option><option value="yearly">Yearly</option></select></label>
+            <label>Light (only darkens) <select class="mwt-input" id="mwt-c-phen-light"><option value="">No override</option><option>daylight</option><option>twilight</option><option>darkness</option></select></label>
+            <label>Priority <input class="mwt-input" type="number" id="mwt-c-phen-priority" min="-100" max="100"></label>
             <label>Visibility gates (JSON; regime, sky, wind, season)<textarea class="mwt-input" id="mwt-c-phen-gates" aria-label="Phenomenon visibility gates"></textarea></label>
             <p>For a daytime eclipse use {"regime":["daylight","twilight"]}; gates affect clauses, not the light override.</p>
             <button type="button" class="mwt-btn" id="mwt-c-phen-apply">Apply phenomenon to draft</button>

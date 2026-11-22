@@ -14,12 +14,13 @@ import { clearCalendarInjection } from '../calendar/injection.js';
  *
  * @param {object} deps
  * @param {Function|null} deps.registerSlashCommand — ST slash command registrar
+ * @param {Function} [deps.registerRawSlashCommand] — registrar preserving unnamed-argument quotes
  * @param {object|null} deps.macroRegistry — ST macro-system registry
  * @param {object} deps.modules — { WorldState, Chronicle, Knowledge }
  * @returns {{ setupSlashCommands: Function, setupMacros: Function }}
  */
-export function createCommands({ registerSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
-    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar } = modules;
+export function createCommands({ registerSlashCommand, registerRawSlashCommand, macroRegistry, modules, resetFloatPositions, saveSettings }) {
+    const { WorldState, Chronicle, Knowledge, StoryPlanner, Interiority, Ambient, Calendar, Ledger } = modules;
 
     // ─── Slash Commands ──────────────────────────────────────────────────────
 
@@ -33,6 +34,14 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
         // is an object of named arguments; the text typed after the command is
         // the second. Reading the first as text breaks the command live.
         try {
+            registerSlashCommand('wt-ledger-add', (_args, command) => {
+                try { return Ledger?.ledgerAddCommand?.(command) ?? 'Ledger not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, [], 'Add signed money: <amount> [currency] [note]. Quote multi-word currency names; create currencies in Ledger first.');
+            (registerRawSlashCommand ?? registerSlashCommand)('wt-item', (_args, command) => {
+                try { return Ledger?.itemCommand?.(command) ?? 'Ledger not available.'; }
+                catch (error) { return `Error: ${error.message}`; }
+            }, [], 'Add inventory: <name> [qty], positive quantity (default 1). Quote multi-word or numeric-ending names.');
             registerSlashCommand('wt-calendar', (_args, command) => {
                 try { return Calendar?.calendarCommand?.(command) ?? 'Calendar not available.'; }
                 catch (error) { return `Error: ${error.message}`; }
@@ -197,6 +206,10 @@ export function createCommands({ registerSlashCommand, macroRegistry, modules, r
                         Chronicle.applyInjection?.();
                         StoryPlanner.applyPlanInjection?.();
                         Interiority.applyIntentionsInjection?.();
+                        // The Ledger has no generation interceptor (its text
+                        // only changes when a gate or the ledger changes), so
+                        // both directions of the switch must refresh it here.
+                        Ledger?.refreshInjection?.('panic-slash-command');
                     } catch { /* modules may not be initialized yet */ }
                 }
                 return `Injection ${mode} for all modules.`;

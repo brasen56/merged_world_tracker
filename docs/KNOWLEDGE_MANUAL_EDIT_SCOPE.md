@@ -35,7 +35,7 @@ regenerated, so it gets the same save guarantees as a ledger cleanup.
 | --- | --- | --- |
 | Edit affordance | The existing View modal gains an explicit Edit mode (see §3) | Read-only remains the default; editing starts only on an explicit action |
 | Write-back | Manual saves route through the checked `beforeWrite` branch of `writeToLorebook` (§5) | Disk read, cache-conflict refusal, pre-mutation guard, and a status-checked save; no new unguarded write path |
-| Recoverability | Prior content is pushed to per-entry history before overwrite (automatic), and the modal gains one **Restore previous version** action (§5.5) | The 50-snapshot cap stays; a full browser trims history instead of losing new snapshots (§5.5) |
+| Recoverability | Prior content is pushed to per-entry history before overwrite (automatic), and the modal gains one **Restore previous version** action (§5.5) | History keeps 10 snapshots per NPC under a 3M-character budget; a full browser trims history instead of losing new snapshots (§5.5) |
 | Concurrent edits | Freshness check inside the write: if the entry body changed since Edit loaded it, refuse and offer reload (§6.1) | Never silently clobber a background update; the user's draft is preserved |
 | Pending proposals | Accepting a staged proposal first checks it was built from the current entry (§6.2) | A stale proposal never silently reverts a hand edit |
 | Relationship block | The textarea holds the entry body only; the managed block is read-only and re-attached on save (§5.4) | The relationship graph stays the block's only source |
@@ -245,7 +245,8 @@ are. The action is hidden when no such record exists.
 This is one step, not a browser. Saving pushes the current text to history, so
 restoring twice toggles between two versions.
 
-History caps at 50 snapshots in localStorage. A write that leaves the body
+History caps at 10 snapshots per NPC in localStorage (50 before 2.18.1; Restore
+only ever reads the newest one that differs). A write that leaves the body
 unchanged, such as a relationship sync or a keyword-only save, stores no
 snapshot: Restore would skip it, and a relationship change would otherwise copy
 the whole entry. A long-running book can still fill the browser's quota: one
@@ -265,7 +266,24 @@ only, so it cannot reach a lorebook entry:
    copy. If the new snapshot still could not fit, nothing is dropped.
 
 Dropping real versions shows one warning per page load: entries are unaffected,
-and exporting the lorebook is how to keep older versions. If a snapshot cannot be
+and exporting the lorebook is how to keep older versions.
+
+Since 2.18.1 history also keeps itself under a budget of 3,000,000 characters
+(keys plus values, the unit the browser quota counts), so the rest of the
+roughly 5.2M site quota stays free for SillyTavern and other extensions. A
+write that takes the total past the budget trims by the same rules down to
+256K below it. That trim is quiet (a `history_budget_trimmed` Diagnostics
+event, no toast), because Restore still works afterwards. The total is
+measured once per page load and then tracked per write, so an ordinary save
+reads only its own key. Once per page load, 10 seconds after startup, every
+stored history is cut to the cap (repeats first) and brought under the
+budget, because a lower cap otherwise applies only when that NPC is next
+saved. NPC import stores history through the same path, so it is validated,
+capped and trimmed instead of silently dropped when the browser is full.
+Keys for books or entries that no longer exist are not removed; that is a
+planned 🧰 Maintenance tool with a preview, not an automatic sweep.
+
+If a snapshot cannot be
 stored at all, a manual save still lands and says the previous version was not
 kept; other writers ignore that failure. The timestamp shows the user when the
 newest usable record is older than they expected. A full history browser remains

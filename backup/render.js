@@ -59,6 +59,9 @@ export const SECTION_LABELS = Object.freeze({
     knowledgeCounters: '🔢 Knowledge Counters',
     storyPlanner: '🗺️ Story Planner',
     interiority: '💭 Interiority',
+    calendar: '📅 Calendar',
+    ambient: '🌦️ Ambient Conditions',
+    ledger: '💰 Ledger',
     knowledgeStore: '📖 Registry & State Tracker',
 });
 
@@ -69,6 +72,9 @@ export const SECTION_ORDER = Object.freeze([
     'knowledgeCounters',
     'storyPlanner',
     'interiority',
+    'calendar',
+    'ambient',
+    'ledger',
     'knowledgeStore',
 ]);
 
@@ -161,6 +167,7 @@ export function formatSectionChangeBits(desc) {
     if (desc.kind === 'exact') {
         if (desc.action === 'removed') bits.push({ text: 'will be removed', tone: 'danger' });
         else if (desc.action === 'blocked') bits.push({ text: 'left unchanged (destination store refused)', tone: 'warning' });
+        else if (desc.action === 'kept') bits.push({ text: 'kept (this older backup does not include it)', tone: 'normal' });
         else if (desc.action === 'unchanged') bits.push({ text: 'unchanged', tone: 'normal' });
         else bits.push({ text: `${desc.added} replaced`, tone: 'normal' });
     } else {
@@ -217,18 +224,21 @@ export function describePreviewFailure(preview) {
 export function buildRestoreModes({
     worldState = '',
     knowledgeCounters = '',
+    calendar = '',
+    ambient = '',
+    ledger = '',
     restoreSessionConfig = false,
 } = {}) {
     const modes = {};
     // An empty value means "let the planner apply its identity-policy default"
     // (e.g. world state defaults to 'keep' on unverified-identity builds). Only
     // an explicit Replace/Keep/Skip from the user overrides that.
-    if (worldState === 'replace' || worldState === 'keep' || worldState === 'skip') {
-        modes.worldState = worldState;
-    }
-    if (knowledgeCounters === 'replace' || knowledgeCounters === 'keep' || knowledgeCounters === 'skip') {
-        modes.knowledgeCounters = knowledgeCounters;
-    }
+    const explicit = value => value === 'replace' || value === 'keep' || value === 'skip';
+    if (explicit(worldState)) modes.worldState = worldState;
+    if (explicit(knowledgeCounters)) modes.knowledgeCounters = knowledgeCounters;
+    if (explicit(calendar)) modes.calendar = calendar;
+    if (explicit(ambient)) modes.ambient = ambient;
+    if (explicit(ledger)) modes.ledger = ledger;
     if (restoreSessionConfig) modes.restoreSessionConfig = true;
     return modes;
 }
@@ -264,6 +274,9 @@ export function readRestoreControlValues(root) {
     return {
         worldState: val('#mwt-bk-ws-mode', ''),
         knowledgeCounters: val('#mwt-bk-counters-mode', ''),
+        calendar: val('#mwt-bk-calendar-mode', ''),
+        ambient: val('#mwt-bk-ambient-mode', ''),
+        ledger: val('#mwt-bk-ledger-mode', ''),
         restoreSessionConfig: checked('#mwt-bk-session-config'),
         exact: checked('#mwt-bk-exact'),
     };
@@ -275,26 +288,28 @@ export function readRestoreControlValues(root) {
  * The Backup / Restore control rendered inside the Settings tab. Buttons are
  * tagged with data-backup-action so wireBackupEvents can bind them by intent.
  */
-export function renderBackupPanel() {
+export function renderBackupPanel({ omitChrome = false } = {}) {
     return `
-        <hr style="border-color:var(--mwt-border);margin:16px 0">
-        <h3 style="margin-bottom:8px">💾 Backup / Restore</h3>
+        ${omitChrome ? '' : '<hr style="border-color:var(--mwt-border);margin:16px 0"><h3 style="margin-bottom:8px">💾 Backup / Restore</h3>'}
         <p style="color:var(--mwt-text-dim);font-size:12px;margin-bottom:12px">
             Export a single versioned backup of <em>this chat's</em> MWT data (world state, chronicle, knowledge
-            evidence/counters/registry, story planner, interiority), or restore one. Restore always shows a dry-run
+            evidence/counters/registry, story planner, interiority, custom calendar, Ambient Conditions settings
+            and weather seed), or restore one. Restore always shows a dry-run
             preview first and auto-downloads a pre-restore backup before writing anything. Lorebook-resident text
             (NPC dossiers/profiles) is not included — use the Knowledge tab's export for those.
         </p>
         <div id="mwt-backup-panel" class="mwt-backup-panel">
             <div class="mwt-flex mwt-gap-8" style="flex-wrap:wrap;align-items:center">
                 <button id="mwt-bk-export" class="mwt-btn" data-backup-action="export"><span aria-hidden="true">⬇</span> Export Backup</button>
+                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download quarantined records for repair; this evidence file is not a restorable backup."><span aria-hidden="true">🧯</span> Download recovery data</button>
+            </div>
+            <p class="mwt-text-dim mwt-text-sm">Recovery data contains refused records for repair, not a restorable backup. Diagnostics → Scope &amp; storage shows per-store counts.</p>
+            <div class="mwt-settings-block">
+                <h4>Restore or undo — This chat</h4>
+                <p>Restore requires a preview and confirmation before writing data.</p>
                 <button id="mwt-bk-restore" class="mwt-btn" data-backup-action="restore"><span aria-hidden="true">⬆</span> Restore from File…</button>
                 <button id="mwt-bk-undo" class="mwt-btn" data-backup-action="undo" title="Replay the pre-restore snapshot captured this session"><span aria-hidden="true">↩</span> Undo Last Restore</button>
-                <button id="mwt-bk-recovery" class="mwt-btn" data-backup-action="recovery-export" title="Download every quarantined record this chat/session holds, as JSON — each item's store + path say where it belongs. The file is evidence, not a restore file: repair the record into a backup's matching section, then restore that backup (DATA_SAFETY_GUIDE.md). Quarantined records also ride in every backup."><span aria-hidden="true">🧯</span> Download recovery data</button>
             </div>
-            <p style="color:var(--mwt-text-dim);font-size:11px;margin:8px 0 0">
-                Recovery data = records MWT refused to load (kept whole, never injected). Diagnostics → 🗂️ Scope &amp; storage shows the per-store counts.
-            </p>
         </div>
     `;
 }
@@ -385,6 +400,24 @@ function buildSummaryModalContent() {
             </select>
             <label class="mwt-label" for="mwt-bk-counters-mode" style="margin:0;text-align:left">🔢 Counters</label>
             <select id="mwt-bk-counters-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-calendar-mode" style="margin:0;text-align:left">📅 Calendar</label>
+            <select id="mwt-bk-calendar-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-ambient-mode" style="margin:0;text-align:left">🌦️ Ambient</label>
+            <select id="mwt-bk-ambient-mode" class="mwt-input" style="width:auto">
+                <option value="">Default (recommended)</option>
+                <option value="replace">Replace with backup</option>
+                <option value="keep">Keep current</option>
+            </select>
+            <label class="mwt-label" for="mwt-bk-ledger-mode" style="margin:0;text-align:left">💰 Ledger</label>
+            <select id="mwt-bk-ledger-mode" class="mwt-input" style="width:auto">
                 <option value="">Default (recommended)</option>
                 <option value="replace">Replace with backup</option>
                 <option value="keep">Keep current</option>
@@ -635,6 +668,13 @@ async function commitRestore() {
     }
 
     if (result.ok && result.committed) {
+        if (result.growthHistory?.ok === false) {
+            setControlBusy(confirmBtn, false);
+            if (confirmBtn) confirmBtn.disabled = true;
+            setBusy(false);
+            setStatus(modal, `Store sections restored, but Growth history could not be restored: ${result.growthHistory.error}. Keep the original backup file to retry.`, 'error');
+            return;
+        }
         if (result.cleanupRecovery?.ok === false || result.cleanupRecovery?.rejected?.length) {
             const recovery = result.cleanupRecovery;
             const detail = recovery.ok === false
@@ -761,7 +801,8 @@ async function handleRecoveryExport() {
 export function wireBackupEvents(modal) {
     state.modal = modal;
     const panel = modal?.querySelector('#mwt-backup-panel');
-    if (!panel) return;
+    if (!panel || panel._mwtWired) return;
+    panel._mwtWired = true;
     panel.querySelector('#mwt-bk-export')?.addEventListener('click', () => { handleExport(); });
     panel.querySelector('#mwt-bk-restore')?.addEventListener('click', () => { handleRestorePick(); });
     panel.querySelector('#mwt-bk-undo')?.addEventListener('click', () => { handleUndo(); });

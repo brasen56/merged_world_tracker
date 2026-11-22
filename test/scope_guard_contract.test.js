@@ -333,4 +333,24 @@ describe('CORE-02 — /wt-inject command contract', () => {
             expect(savedPatches[0].injectionMasterOff).toBe(false);
         });
     });
+
+    test('both directions refresh the Ledger, which has no generation interceptor', async () => {
+        const calls = [];
+        const modules = {
+            WorldState: {}, Chronicle: {}, Knowledge: {}, StoryPlanner: {}, Interiority: {},
+            Ledger: { refreshInjection: reason => calls.push(reason) },
+        };
+        let capturedHandler = null;
+        createCommands({
+            registerSlashCommand: (name, handler) => { if (name === 'wt-inject') capturedHandler = handler; },
+            macroRegistry: null,
+            modules,
+            resetFloatPositions: () => {},
+            saveSettings: () => {},
+        }).setupSlashCommands();
+
+        await capturedHandler({}, 'off');
+        await capturedHandler({}, 'on');
+        expect(calls).toEqual(['panic-slash-command', 'panic-slash-command']);
+    });
 });

@@ -39,11 +39,12 @@ import {
     mergeRelationshipIdentities, repairRelationshipEntityNames,
     syncAllRelationshipsToLorebooks,
 } from './relationships.js';
-import { backfillRelationshipEntityIds, ensureRegistryIdentityFields } from './schema.js';
-import { renameEvidenceFile, mergeEvidenceFiles, canRekeyEvidence, canRenameEvidence } from './evidence.js';
+import { backfillRelationshipEntityIds, ensureRegistryIdentityFields, repairGrowthDossier } from './schema.js';
+import { renameEvidenceFile, mergeEvidenceFiles, canRekeyEvidence, canRenameEvidence, getEvidenceMap } from './evidence.js';
 import { renameDossierFieldStatus, mergeDossierFieldStatus } from './dossier_status.js';
 import { getLorebookName, getProfileLorebookName } from './scope.js';
 import { flushBook } from './store.js';
+import { mergeGrowthHistoryIdentities } from './growth_history.js';
 // Direct import (not the barrel): the scope guard must be the REAL module's
 // epoch/identity state under the test barrel→stub alias too. scopeStillCurrent
 // carries the §7.5 semantics a write path needs — the epoch (bumped
@@ -435,11 +436,26 @@ export async function mergeEntities(keepName, mergeName, { relabelEntries = true
     const merge = reg[mergeKey];
     const warnings = [];
 
+    const adoptedUid = (keep.uid === null || keep.uid === undefined) && merge.uid !== null && merge.uid !== undefined;
+    try {
+        await mergeGrowthHistoryIdentities(keep.entityId, merge.entityId, knowledgeBook, () => {
+            if (!scopeGuard.stillCurrent() || getRegistryEntry(keepKey)?.info !== keep
+                || getRegistryEntry(mergeKey)?.info !== merge) throw new Error('Chat scope or NPC changed during history merge');
+        }, getEvidenceMap()[keepKey] ? merge.entityId : null, adoptedUid);
+    } catch (err) {
+        return { ok: false, reason: 'growth-history-unavailable', warnings: [String(err?.message || err)] };
+    }
+
     // 1) Registry: combine the records under keep. Uid/profile pointers are
     //    adopted only where keep has none — an existing pointer is a statement
     //    about which physical entry is authoritative.
-    const adoptedUid = (keep.uid === null || keep.uid === undefined) && merge.uid !== null && merge.uid !== undefined;
-    if (adoptedUid) keep.uid = merge.uid;
+    if (adoptedUid) {
+        keep.uid = merge.uid;
+        if (merge.growthDossier) {
+            keep.growthDossier = repairGrowthDossier({ ...merge.growthDossier, ...keep.growthDossier,
+                limits: { ...merge.growthDossier.limits, ...keep.growthDossier?.limits } });
+        }
+    }
     const adoptedProfileUid = (keep.profileUid === null || keep.profileUid === undefined)
         && merge.profileUid !== null && merge.profileUid !== undefined;
     if (adoptedProfileUid) keep.profileUid = merge.profileUid;

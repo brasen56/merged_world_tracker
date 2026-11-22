@@ -14,7 +14,8 @@
 ## The short version
 
 MWT saves a lot for you — world state documents, chronicle entries, NPC
-knowledge evidence, story plans, interiority ledgers. Today it *trusts* that
+knowledge evidence, story plans, interiority ledgers, your custom calendar,
+Ambient Conditions settings. Today it *trusts* that
 this saved data is in exactly the shape it expects. MWT 2.0 adds a safety layer
 underneath all of it: saved data gets **checked** before it's used, old chats
 **upgrade themselves automatically** the first time you open them, and a record
@@ -322,6 +323,9 @@ update — this one included — fully recoverable from your side.
 | Will I notice any of this running? | Almost never. At most a one-time banner, or a brief "preparing…" note in one module. |
 | Is my writing checked or changed? | No. Only MWT's own saved structures — never your prose or lorebook content. |
 | What if I roll back to an older MWT? | Keep the backup you made before updating. Versions older than 2.0 predate this system, so rolling back isn't a guaranteed path for chats that were already upgraded. |
+| What does an MWT backup include? | Everything MWT keeps in the chat: World State, Chronicle, Knowledge evidence, counters and registry, Story Planner, Interiority, your custom calendar, and Ambient Conditions settings with the weather seed (so the same story time brings back the same weather). Not included: lorebook dossier text and your global settings. |
+| I restored a backup made before calendar and Ambient were included. What happened to them? | Nothing. That backup has no calendar or Ambient section, so your current ones are kept as they are, even by an exact (replace) restore. Export a fresh backup to include them. |
+| Will a calendar that fails its checks be removed? | No. An invalid calendar stays where it is (the Overview shows it as "invalid calendar" with the reasons) and rides along in backups as-is, so you can fix it. Only an unreadable value pauses the Calendar. |
 
 ---
 

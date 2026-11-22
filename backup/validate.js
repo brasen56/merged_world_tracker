@@ -31,6 +31,7 @@ import { STORE_SCHEMAS, getStoreSchema } from '../schema/registry.js';
 import { ISSUE_SEVERITIES, prepareStore } from '../core/schema.js';
 import { importQuarantineItems } from '../core/quarantine.js';
 import { CLEANUP_RECOVERY_VERSION } from '../knowledge/cleanup_recovery.js';
+import { readGrowthHistoryContainerFromBook, GROWTH_HISTORY_SENTINEL } from '../knowledge/growth_history.js';
 
 /**
  * Adapt a module-schema validation result to the backup summary shape.
@@ -324,6 +325,13 @@ export function validateBackupEnvelope(envelope, { maxFormatVersion = FORMAT_VER
         } else {
             result.warnings.push('Cleanup-recovery container was ignored (unrecognized shape or a newer version); the records stay recoverable inside the backup file.');
         }
+    }
+    if (envelope.growthHistory != null) {
+        const checked = readGrowthHistoryContainerFromBook({ entries: { 0: {
+            comment: GROWTH_HISTORY_SENTINEL, content: JSON.stringify(envelope.growthHistory),
+        } } });
+        if (checked.ok) result.growthHistory = { version: checked.version, records: checked.records };
+        else result.warnings.push('Growth history was ignored (unrecognized shape or version); it remains recoverable in the backup file.');
     }
     result.ok = result.errors.length === 0;
     return result;

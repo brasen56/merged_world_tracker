@@ -1,0 +1,597 @@
+/** @vitest-environment jsdom */
+import { beforeEach, afterEach, test, expect, vi } from 'vitest';
+import * as fake from './stubs/core.js';
+
+import { createLedger } from '../ledger/data.js';
+import { createLedgerReceiptIdentityBatch, getOrCreateLedgerReceiptIdentity, ledgerReceiptIdentities } from '../core/ledger_message_identity.js';
+import { renderLedger, wireLedger } from '../ledger/render.js';
+import { getLedger, saveLedger } from '../ledger/store.js';
+import { initLedgerProposals, expireLedgerProposals, decideLedgerProposals, proposalSource } from '../ledger/proposals.js';
+import { buildLedgerRefreshSnapshot, publishLedgerReport, LEDGER_SNAPSHOT_CHAR_LIMIT } from '../core/ledger_refresh.js';
+import { cutLedgerReport, ledgerMessageDigest, resolveLedgerReport } from '../core/ledger_report.js';
+import { normaliseOutput } from '../core/api.js';
+import { getLedgerDiagnostics, getEvents, _resetDiagnostics } from '../core/diagnostics.js';
+import { captureScope, _resetEpoch, bumpEpoch } from '../core/scope.js';
+import { _resetPausedStores, pauseStore } from '../core/schema_status.js';
+import { refreshWorldState, refreshWorldStateDelta, getRecentMessagesForScan, getMessagesSinceForScan } from '../world_state/refresh.js';
+import { state, getWorldStateText, setWorldStateData } from '../world_state/data.js';
+import { buildRefreshStatusDelta } from '../world_state/delta.js';
+import { saveSettings } from '../world_state/settings.js';
+
+const evidence = 'She paid thirty gold coins to the smith.';
+const line = { kind: 'money', currency: 'gold', amount: '-30', evidence };
+const report = (body, row = line, tag = 'json') => `${body}\n\n\`\`\`${tag}\n${JSON.stringify(row)}\n\`\`\``;
+const doc = '## Current Scene\nDate: March 4, 2026\nTime: 09:30\nLocation: The harbour\nPresent: Alex\nSituation: Waiting.\n\n## Recent Changes\n- The ship arrived.\n\n## Key Character States\n- **Alex**:\n  - Mood: calm';
+let globals;
+let requests;
+
+beforeEach(() => {
+    fake.resetCoreStubs();
+    _resetEpoch();
+    _resetPausedStores();
+    _resetDiagnostics();
+    globals = { enableLedger: true, ledgerProposals: true };
+    fake.setFakeContextExtras({ globalSettings: globals });
+    fake.setFakeChat(Array.from({ length: 6 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: evidence })));
+    vi.stubGlobal('SillyTavern', { getContext: () => ({ ...fake.getContextSafe(),
+        extensionSettings: { merged_world_tracker: globals }, getCurrentChatId: () => 'phase6' }) });
+    state.wstIsRefreshing = false;
+    state.autoRefreshQueued = false;
+    state.modal = null;
+    saveSettings({ apiUrl: 'http://example.test', modelName: 'test', groundingEnabled: false });
+    const ledger = createLedger();
+    ledger.currencies.push({ id: 'gold', name: 'gold', decimals: 0, badge: true });
+    saveLedger(ledger);
+    initLedgerProposals();
+    requests = [];
+    fake.setFakeApi(async request => { requests.push(request); return report(doc); });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+afterEach(() => {
+    document.body.innerHTML = '';
+    state.wstIsRefreshing = false;
+    if (state.autoRefreshDeferTimer) clearTimeout(state.autoRefreshDeferTimer);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
+
+test.each(['pending', 'accepted', 'rejected'])('swipes and reloads preserve %s receipts and prevent replay', async status => {
+    fake.setFakeChat([{ name: 'Alex', mes: evidence, extra: { mwt_uuid: 'legacy' },
+        swipe_info: [{ extra: { mwt_uuid: 'legacy' } }, { extra: {} }] }, { mes: 'tail' }, { mes: 'tail' }]);
+    await refreshWorldState();
+    const original = getLedger().proposals[0];
+    if (status !== 'pending') decideLedgerProposals([original.id], status, { choices: { [original.id]: 'accept' } });
+    const message = fake.getChat()[0];
+    message.extra = {};
+    message.mes = 'An alternate outcome.';
+    // Simulate persistence and reopening, not just an in-memory swipe.
+    fake.setFakeChat(JSON.parse(JSON.stringify(fake.getChat())));
+    await expireLedgerProposals();
+    expect(getLedger().proposals[0]).toMatchObject({ id: original.id, status });
+    expect(proposalSource(original)).toMatchObject({ missing: false, changed: true });
+    fake.getChat()[0].extra = { mwt_uuid: 'legacy' };
+    fake.getChat()[0].mes = evidence;
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    fake.getChat().splice(0, 1);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(status === 'accepted' ? 1 : 0);
+    if (status === 'accepted') {
+        expect(proposalSource(getLedger().proposals[0])).toMatchObject({ missing: true, changed: true });
+        expect(renderLedger()).toContain('source deleted after accept');
+    }
+});
+
+test('copied messages get distinct identities without inheriting the original receipt aliases', () => {
+    const original = { mes: evidence, extra: { mwt_uuid: 'original' }, swipe_info: [{ extra: { mwt_uuid: 'other-swipe' } }] };
+    fake.setFakeChat([original]);
+    const identity = getOrCreateLedgerReceiptIdentity(original);
+    const copy = JSON.parse(JSON.stringify(original));
+    copy.mes = 'He paid thirty gold for a different purchase.';
+    fake.setFakeChat([original, copy]);
+    const batch = createLedgerReceiptIdentityBatch(fake.getChat());
+    const copyIdentity = batch.getIdentity(copy);
+    expect(copyIdentity).not.toBe(identity);
+    expect(batch.getIdentity(original)).toBe(identity);
+    batch.save();
+    expect(ledgerReceiptIdentities(copy)).toEqual([copyIdentity, copyIdentity]);
+    expect(proposalSource({ msg: { identity: copyIdentity, digest: ledgerMessageDigest(copy.mes) } }).index).toBe(1);
+    const records = [original, copy].map((message, index) => ({ index, identity: index ? copyIdentity : identity,
+        text: message.mes, digest: ledgerMessageDigest(message.mes) }));
+    const result = resolveLedgerReport([line, { ...line, evidence: copy.mes }], {
+        ledger: getLedger(), chat: fake.getChat(), records,
+    });
+    expect(result.proposals.map(row => row.msg.identity)).toEqual([identity, copyIdentity]);
+    expect(getOrCreateLedgerReceiptIdentity(copy)).toBe(copyIdentity);
+    fake.setFakeChat([copy]);
+    expect(getOrCreateLedgerReceiptIdentity(copy)).toBe(copyIdentity);
+    expect(ledgerReceiptIdentities(copy)).not.toContain(identity);
+});
+
+test('all legacy swipe aliases survive deletion, reload and expiry', async () => {
+    const message = { mes: evidence, extra: { mwt_uuid: 'active' }, swipe_info: [{ extra: { mwt_uuid: 'deleted' } }] };
+    fake.setFakeChat([message]);
+    getOrCreateLedgerReceiptIdentity(message);
+    message.swipe_info = [];
+    fake.setFakeChat(JSON.parse(JSON.stringify([message])));
+    const ledger = getLedger();
+    ledger.proposals = ['active', 'deleted'].map((alias, index) => ({ id: `legacy-${index}`, kind: 'money',
+        money: { currency: 'gold', amount: -30 }, evidence,
+        msg: { identity: `uuid:${alias}`, digest: ledgerMessageDigest(evidence) }, status: 'pending' }));
+    saveLedger(ledger);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(2);
+    getLedger().proposals.forEach(row => expect(proposalSource(row).missing).toBe(false));
+});
+
+test.each(['recent', 'delta'])('%s scan persists twenty new receipts once, and unchanged receipts not at all', mode => {
+    const saveChat = vi.fn();
+    fake.setFakeContextExtras({ saveChat, saveChatDebounced: undefined });
+    globals.maxScanMessages = 30;
+    fake.setFakeChat(Array.from({ length: 22 }, () => ({ mes: evidence })));
+    const scan = () => mode === 'recent' ? getRecentMessagesForScan({ withRecords: true }) : getMessagesSinceForScan(0, { withRecords: true });
+    const first = scan();
+    expect(first.records.length).toBeGreaterThanOrEqual(20);
+    expect(saveChat).toHaveBeenCalledTimes(1);
+    expect(first.records.every(row => Object.isFrozen(row))).toBe(true);
+    scan();
+    expect(saveChat).toHaveBeenCalledTimes(1);
+});
+
+test('legacy receipts on inactive swipes do not expire before a new scan', async () => {
+    const ledger = getLedger();
+    ledger.proposals = [{ id: 'old', kind: 'money', money: { currency: 'gold', amount: -30 }, evidence,
+        msg: { identity: 'uuid:legacy', digest: ledgerMessageDigest(evidence) }, status: 'accepted' }];
+    saveLedger(ledger);
+    fake.setFakeChat([{ mes: 'Alternate', extra: {}, swipe_info: [{ extra: { mwt_uuid: 'legacy' } }] }]);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(proposalSource(ledger.proposals[0]).missing).toBe(false);
+});
+
+test.each(['text', 'delta text', 'full', 'delta', 'catch-up'])('%s scans do not stamp or save messages without a report request', async mode => {
+    globals.ledgerProposals = false;
+    const saveChatDebounced = vi.fn();
+    fake.setFakeContextExtras({ saveChatDebounced });
+    fake.setFakeChat(Array.from({ length: 6 }, () => ({ name: 'Alex', mes: evidence })));
+    if (mode === 'text') getRecentMessagesForScan();
+    else if (mode === 'delta text') getMessagesSinceForScan(0);
+    else if (mode === 'full') await refreshWorldState();
+    else {
+        saveSettings({ deltaMode: true, maxScanMessages: mode === 'catch-up' ? 2 : 50 });
+        setWorldStateData({ text: doc, deltaStatus: buildRefreshStatusDelta('full', doc, {}, 0, 'detailed') });
+        if (mode === 'catch-up') {
+            fake.getChat().forEach(message => { message.mes += 'x'.repeat(11000); });
+            await refreshWorldState();
+        } else {
+            fake.setFakeApi(async () => '### NO CHANGES');
+            await refreshWorldStateDelta();
+        }
+    }
+    expect(fake.getChat().every(message => !message.extra && !message.mwt_ledger_identity)).toBe(true);
+    expect(saveChatDebounced).not.toHaveBeenCalled();
+});
+
+test('cuts before REAL normalization; the JSON fence would otherwise replace the document', () => {
+    expect(normaliseOutput(report(doc))).not.toContain('## Current Scene');
+    expect(normaliseOutput(cutLedgerReport(report(doc)).text)).toBe(doc);
+});
+
+test.each(['json', ''])('empty %j reports leave a full refresh intact', async tag => {
+    fake.setFakeApi(async () => `${doc}\n\`\`\`${tag}\n[]\n\`\`\``);
+    await refreshWorldState();
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test('explicit report with closing chatter still commits and harvests', async () => {
+    fake.setFakeApi(async () => `${report(doc, line, 'mwt-ledger-report')}\nLet me know if you need anything else!`);
+    await refreshWorldState();
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+});
+
+test('an unclosed explicit report commits on the first attempt and keeps its complete rows', async () => {
+    const truncated = `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify(line)}\n{"kind":"money","curr`;
+    fake.setFakeApi(async request => { requests.push(request); return truncated; });
+    await refreshWorldState();
+    expect(requests).toHaveLength(1);
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+});
+
+test('delta output survives an unclosed explicit report', async () => {
+    await refreshWorldState();
+    fake.setFakeChat([...fake.getChat(), { id: 'new', name: 'Alex', mes: evidence }, { id: 'tail', mes: 'tail' }]);
+    fake.setFakeApi(async () => `### NO CHANGES\n\`\`\`mwt-ledger-report\n${JSON.stringify({ ...line, amount: '-20' })}`);
+    expect(await refreshWorldStateDelta()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(2);
+});
+
+test('full refresh commits a clean document, freezes identities, and only persists pending proposals', async () => {
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().transactions).toEqual([]);
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedger().proposals[0]).toMatchObject({ status: 'pending', money: { amount: -30, currency: 'gold' }, msg: { identity: 'id:m0' } });
+    expect(requests[0].userContent).toContain('Ledger snapshot');
+    expect(getLedgerDiagnostics()).toMatchObject({ 'reports-seen': 1, 'lines-kept': 1, 'refreshes:with-report': 1 });
+});
+
+test('an older edit with three currencies appears in the already-open pending list without replacing drafts', async () => {
+    fake.setFakeChat(Array.from({ length: 12 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: 'She walked home.' })));
+    const ledger = getLedger();
+    ledger.currencies.push({ id: 'silver', name: 'silver', decimals: 0, badge: false },
+        { id: 'copper', name: 'copper', decimals: 0, badge: false });
+    saveLedger(ledger);
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    pending.open = true;
+    const form = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+    form.elements.namedItem('name').value = 'Gold coins';
+    // The edited slot is seven messages back and has already been scanned.
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n\`\`\``);
+    await refreshWorldState();
+    fake.getChat()[5].mes = evidence;
+    fake.setFakeApi(async () => report(doc));
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedger().proposals[0].msg.identity).toBe('id:m5');
+    expect(pending.querySelector('summary').textContent).toContain('(1)');
+    expect(pending.textContent).toContain(evidence);
+    expect(pending.open).toBe(true);
+    expect(form.isConnected).toBe(true);
+    expect(form.elements.namedItem('name').value).toBe('Gold coins');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(getLedger().currencies[0].name).toBe('Gold coins');
+    expect(getLedger().proposals).toHaveLength(1);
+    // Expiry also refreshes the same preview while another draft stays intact.
+    const nextPending = document.querySelector('[data-ledger-open-key="pending"]');
+    const nextForm = document.querySelector('form[data-ledger-form="currency"][data-id="gold"]');
+    nextForm.elements.namedItem('name').value = 'Another draft';
+    fake.getChat()[5] = { id: 'replacement', name: 'Alex', mes: 'She walked home.' };
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toEqual([]);
+    expect(nextPending.querySelector('summary').textContent).toContain('(0)');
+    expect(nextForm.elements.namedItem('name').value).toBe('Another draft');
+});
+
+test('proposal notifications cannot populate a pane captured for a previous chat', async () => {
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    bumpEpoch();
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(pending.querySelector('summary').textContent).toContain('(0)');
+    expect(pending.textContent).not.toContain(evidence);
+});
+
+test.each(['pretty object', 'JSON array'])('a %s report survives the full refresh and evidence gates', async shape => {
+    const block = JSON.stringify(shape === 'JSON array' ? [line] : line, null, 2);
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${block}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedger().transactions).toEqual([]);
+    expect(getLedgerDiagnostics()['dropped:parse']).toBeUndefined();
+});
+
+test('a sign-pair double report (the tester’s −650/+650 case) drops both lines', async () => {
+    const spend = { kind: 'money', currency: 'gold', amount: '-30', counterparty: 'Ezra', evidence };
+    const repay = { kind: 'money', currency: 'gold', amount: '30', counterparty: 'Ezra', loan: true, evidence };
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify(spend)}\n${JSON.stringify(repay)}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()).toMatchObject({ 'dropped:contradictory': 2, 'dropped:contradictory:sign-pair': 2 });
+});
+
+test('two opposite events in one message with distinct evidence both stay', async () => {
+    const refund = 'Later the smith refunded her thirty gold coins.';
+    fake.setFakeChat(Array.from({ length: 6 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: `${evidence} ${refund}` })));
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\n${JSON.stringify({ ...line, amount: '-30' })}\n${JSON.stringify({ ...line, amount: '30', evidence: refund })}\n\`\`\``);
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30, 30]);
+    expect(getLedgerDiagnostics()['dropped:contradictory']).toBeUndefined();
+});
+
+test('a sign-flipped re-report matching a stored proposal’s evidence drops only the newcomer', async () => {
+    await refreshWorldState();
+    fake.setFakeApi(async () => report(doc, { ...line, amount: '30', loan: true, counterparty: 'Ezra' }));
+    await refreshWorldState();
+    expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30]);
+    expect(getLedgerDiagnostics()['dropped:contradictory']).toBe(1);
+});
+
+test('pending suggestions render formatted money with loan and counterparty, and flag edited sources', async () => {
+    const ledger = getLedger();
+    ledger.currencies.push({ id: 'usd', name: 'Personal Main', decimals: 2, badge: false });
+    saveLedger(ledger);
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    document.body.insertAdjacentHTML('beforeend', '<button id="mwt-tab-ledger">Ledger</button>');
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    fake.setFakeApi(async () => report(doc, { kind: 'money', currency: 'Personal Main', amount: '-650', counterparty: 'Ezra', loan: true, evidence }));
+    await refreshWorldState();
+    expect(pending.textContent).toContain('-650.00');
+    expect(pending.textContent).toContain('Personal Main');
+    expect(pending.textContent).toContain('loan');
+    expect(pending.textContent).toContain('with Ezra');
+    expect(pending.textContent).not.toContain('source message edited');
+    fake.getChat()[0].mes = `${evidence} Then she thought better of it.`;
+    document.getElementById('mwt-tab-ledger').click();
+    expect(pending.textContent).toContain('source message edited');
+});
+
+test('showing the Ledger tab after a delete expires the gone-source proposal', async () => {
+    await refreshWorldState();
+    document.body.innerHTML = `<div id="root">${renderLedger()}</div>`;
+    wireLedger(document.getElementById('root'));
+    document.body.insertAdjacentHTML('beforeend', '<button id="mwt-tab-ledger">Ledger</button>');
+    const pending = document.querySelector('[data-ledger-open-key="pending"]');
+    expect(pending.querySelector('summary').textContent).toContain('(1)');
+    fake.setFakeChat([{ id: 'other', name: 'Alex', mes: 'The payment never happened.' }]);
+    document.getElementById('mwt-tab-ledger').click();
+    await new Promise(resolve => setTimeout(resolve));
+    expect(getLedger().proposals).toEqual([]);
+    expect(pending.querySelector('summary').textContent).toContain('(0)');
+});
+
+test.each([
+    [{ ...line, amount: -30 }, 'amount-type'],
+    [{ ...line, amount: '-30.5' }, 'amount-format'],
+    [{ ...line, amount: '0' }, 'amount-zero'],
+    [{ ...line, counterparty: null }, 'counterparty-type'],
+    [{ ...line, loan: null }, 'loan-type'],
+    [{ ...line, loan: true }, 'loan-counterparty'],
+    [{ kind: 'item', name: 'Rope', qtyChange: 1, evidence }, 'quantity-type'],
+    [{ kind: 'item', name: 'Rope', qtyChange: '1', carried: null, evidence }, 'carried-type'],
+])('reports the exact field rejection (%s, %s) without putting prose in diagnostics', async (row, code) => {
+    fake.setFakeApi(async () => report(doc, row));
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()).toMatchObject({ 'reports-seen': 1, 'dropped:parse': 1, [`dropped:parse:${code}`]: 1 });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(`parse: ${code}`), row);
+    expect(JSON.stringify(getEvents())).not.toContain(evidence);
+});
+
+test('the report prompt gives literal quoted amount examples and omits unknown optional fields', async () => {
+    await refreshWorldState();
+    expect(requests[0].systemPrompt).toContain('"amount":"-30"');
+    expect(requests[0].systemPrompt).toContain('never use null');
+    expect(requests[0].userContent).toContain('Currency: "gold" (decimal places: 0)');
+});
+
+test('only the successful retry report is harvested; snapshot stays frozen across a ledger edit', async () => {
+    fake.setFakeApi(async request => {
+        requests.push(request);
+        if (requests.length === 1) {
+            const ledger = getLedger();
+            ledger.items.push({ id: 'rope', name: 'NEW MID-CALL ITEM', qty: 1, carried: true, note: '' });
+            saveLedger(ledger);
+            const leaked = doc.replace('\n\n## Recent Changes', '\n\nCurrent Scene contract:\n- Include Date, Time, Location, Present, and Situation exactly once.\n\n## Recent Changes');
+            return report(leaked, { ...line, amount: '-99' });
+        }
+        return report(doc);
+    });
+    await refreshWorldState();
+    expect(requests).toHaveLength(2);
+    expect(requests[1].userContent).not.toContain('NEW MID-CALL ITEM');
+    expect(requests[1].userContent).toContain('Current Scene contains content outside its scalar field lines.');
+    expect(getWorldStateText()).toBe(doc);
+    expect(getLedger().proposals.map(row => row.money.amount)).toEqual([-30]);
+    expect(getLedgerDiagnostics()['validation-failures:with-report']).toBe(1);
+});
+
+test('failed refresh harvests nothing', async () => {
+    fake.setFakeApi(async () => report('bad document'));
+    await expect(refreshWorldState()).rejects.toThrow(/rejected/i);
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test('scope switch during generation discards both the document and proposals', async () => {
+    fake.setFakeApi(async () => { bumpEpoch(); return report(doc); });
+    expect(await refreshWorldState()).toBeNull();
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test.each(['enableLedger', 'ledgerProposals'])('closed %s gate adds no prompt tokens and ignores unsolicited reports', async key => {
+    globals[key] = false;
+    expect(buildLedgerRefreshSnapshot()).toBe('');
+    await refreshWorldState();
+    expect(requests[0].userContent).not.toContain('Ledger snapshot');
+    expect(requests[0].systemPrompt).not.toContain('mwt-ledger-report');
+    expect(getLedger().proposals).toEqual([]);
+    expect(getWorldStateText()).toBe(doc);
+});
+
+test('delta NO CHANGES and patch output both harvest only after their commit', async () => {
+    await refreshWorldState();
+    fake.setFakeChat([...fake.getChat(), { id: 'new', name: 'Alex', mes: evidence }, { id: 'tail', mes: 'tail' }]);
+    fake.setFakeApi(async () => report('### NO CHANGES', { ...line, amount: '-20' }));
+    expect(await refreshWorldStateDelta()).toBe(doc);
+    expect(getLedger().proposals).toHaveLength(2);
+    fake.setFakeChat([...fake.getChat(), { id: 'next', name: 'Alex', mes: evidence }, { id: 'tail2', mes: 'tail' }]);
+    fake.setFakeApi(async () => report('### REMOVE: Recent Changes', { ...line, amount: '-10' }));
+    expect(await refreshWorldStateDelta()).not.toContain('## Recent Changes');
+    expect(getLedger().proposals).toHaveLength(3);
+});
+
+test('a refused listener write never turns a committed refresh into a failure', async () => {
+    const broken = new CustomEvent('mwt:ledger-report', { detail: { scope: captureScope(), chatId: 'chat:phase6', lines: null, records: [] } });
+    expect(() => document.dispatchEvent(broken)).not.toThrow();
+    expect(getLedgerDiagnostics()['harvest-refused']).toBe(1);
+    expect(await refreshWorldState()).toBe(doc);
+});
+
+test('a paused Ledger refuses the post-commit handoff without failing World State', async () => {
+    const refuse = () => pauseStore('ledger', { message: 'test refusal' });
+    document.addEventListener('mwt:ledger-report', refuse, { capture: true, once: true });
+    expect(await refreshWorldState()).toBe(doc);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()['harvest-refused']).toBe(1);
+});
+
+test('a refused World State commit harvests nothing', async () => {
+    fake.setFakeApi(async () => { pauseStore('worldState', { message: 'test refusal' }); return report(doc); });
+    expect(await refreshWorldState()).toBeNull();
+    expect(getLedger().proposals).toEqual([]);
+});
+
+test('catch-up chunks carry their own records and only harvest committed passes', async () => {
+    saveSettings({ deltaMode: true, maxScanMessages: 2 });
+    setWorldStateData({ text: doc, deltaStatus: buildRefreshStatusDelta('full', doc, {}, 0, 'detailed') });
+    fake.setFakeChat(Array.from({ length: 6 }, (_, index) => ({ id: `m${index}`, name: 'Alex', mes: `${evidence} ${'x'.repeat(11000)}` })));
+    expect(await refreshWorldState()).toBe(doc);
+    const proposals = getLedger().proposals;
+    expect(proposals.map(row => row.msg.identity)).toEqual(['id:m0', 'id:m1', 'id:m2', 'id:m3']);
+});
+
+test.each(['absent', 'empty', 'invalid', 'paused', 'future'])('unhealthy or %s ledger adds no request', kind => {
+    const meta = fake.getChatMeta();
+    if (kind === 'absent') delete meta.mwt_ledger;
+    if (kind === 'empty') meta.mwt_ledger = createLedger();
+    if (kind === 'invalid') meta.mwt_ledger.currencies = 'bad';
+    if (kind === 'paused') pauseStore('ledger', { message: 'test' });
+    if (kind === 'future') meta.mwt_ledger.version = 99;
+    expect(buildLedgerRefreshSnapshot()).toBe('');
+});
+
+test('expiry retains accepted missing-source receipts within the cap and preserves malformed audit rows', async () => {
+    const ledger = getLedger();
+    const draft = { kind: 'money', money: { currency: 'gold', amount: -1 }, evidence,
+        msg: { identity: 'id:m0', digest: ledgerMessageDigest(evidence) }, status: 'accepted' };
+    ledger.proposals = Array.from({ length: 305 }, (_, i) => ({ ...draft, id: `p${i}` }));
+    ledger.proposals.push({ ...draft, id: 'gone', msg: { ...draft.msg, identity: 'id:gone' } }, { broken: true });
+    saveLedger(ledger);
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(301);
+    expect(getLedger().proposals[0].id).toBe('p6');
+    expect(getLedger().proposals.at(-2).id).toBe('gone');
+    expect(getLedger().proposals.at(-1)).toEqual({ broken: true });
+});
+
+test('snapshot bounds and filtered window records cover only supplied evidence', () => {
+    const ledger = getLedger();
+    ledger.items = Array.from({ length: 50 }, (_, i) => ({ id: `i${i}`, name: `Item ${i}`, qty: 1, carried: true, note: '' }));
+    saveLedger(ledger);
+    const snapshot = buildLedgerRefreshSnapshot();
+    expect(snapshot).toContain('10 more item names');
+    expect(snapshot.length).toBeLessThanOrEqual(LEDGER_SNAPSHOT_CHAR_LIMIT);
+    expect(getRecentMessagesForScan({ withRecords: true }).records.map(row => row.index)).toEqual([0, 1, 2, 3]);
+});
+
+test.each(['pending', 'accepted', 'rejected'])('expiry preserves %s history until sparse slots hydrate', async status => {
+    const ledger = getLedger();
+    ledger.proposals = ['m0', 'm1', 'gone'].map(id => ({ id, kind: 'money',
+        money: { currency: 'gold', amount: -1 }, evidence,
+        msg: { identity: `id:${id}`, digest: ledgerMessageDigest(evidence) }, status }));
+    saveLedger(ledger);
+    delete fake.getChat()[0];
+    fake.getChat()[1] = undefined;
+    await expireLedgerProposals();
+    expect(getLedger().proposals.map(row => row.id)).toEqual(['m0', 'm1', 'gone']);
+    fake.getChat()[0] = { id: 'm0', mes: evidence };
+    fake.getChat()[1] = { id: 'm1', mes: evidence };
+    await expireLedgerProposals();
+    expect(getLedger().proposals.map(row => row.id)).toEqual(status === 'accepted' ? ['m0', 'm1', 'gone'] : ['m0', 'm1']);
+});
+
+test('sparse history still caps tombstones without expiring pending proposals', async () => {
+    const ledger = getLedger();
+    const draft = { kind: 'money', money: { currency: 'gold', amount: -1 }, evidence,
+        msg: { identity: 'id:unloaded', digest: ledgerMessageDigest(evidence) } };
+    ledger.proposals = Array.from({ length: 305 }, (_, index) => ({ ...draft, id: `p${index}`, status: 'rejected' }));
+    ledger.proposals.push({ ...draft, id: 'pending', status: 'pending' });
+    saveLedger(ledger);
+    delete fake.getChat()[0];
+    await expireLedgerProposals();
+    expect(getLedger().proposals).toHaveLength(301);
+    expect(getLedger().proposals[0].id).toBe('p5');
+    expect(getLedger().proposals.at(-1).id).toBe('pending');
+});
+
+test('expiry cannot act on another scope after awaiting hydration', async () => {
+    const ledger = getLedger();
+    ledger.proposals = [{ id: 'gone', kind: 'money', money: { currency: 'gold', amount: -1 }, evidence,
+        msg: { identity: 'id:gone', digest: ledgerMessageDigest(evidence) }, status: 'pending' }];
+    saveLedger(ledger);
+    const expiry = expireLedgerProposals();
+    bumpEpoch();
+    await expiry;
+    expect(getLedger().proposals).toHaveLength(1);
+});
+
+test('regex-filtered evidence is not harvested even though it remains in raw messages', async () => {
+    saveSettings({ messageFilter: 'She paid thirty gold coins to the smith\\.' });
+    fake.getChat().forEach(message => { message.mes = `${evidence} She walked home afterward.`; });
+    await refreshWorldState();
+    expect(requests[0].userContent).not.toContain(evidence);
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()['dropped:evidence']).toBe(1);
+});
+
+test.each(['added quote', 'retained quote'])('mid-flight edits cannot supply a new digest: %s', async kind => {
+    const original = kind === 'added quote' ? 'She walked home afterward.' : evidence;
+    fake.getChat().forEach(message => { message.mes = original; });
+    const records = getRecentMessagesForScan({ withRecords: true }).records;
+    fake.setFakeApi(async () => {
+        fake.getChat().forEach(message => { message.mes = `${evidence} Added during generation.`; });
+        return report(doc);
+    });
+    await refreshWorldState();
+    expect(getLedger().proposals).toEqual([]);
+    expect(records.every(row => row.digest === ledgerMessageDigest(original))).toBe(true);
+    expect(records.every(row => row.text === original && Object.isFrozen(row))).toBe(true);
+});
+
+test.each([true, false])('oversized catch-up grounds only the supplied prefix (quote supplied: %s)', async supplied => {
+    saveSettings({ deltaMode: true, maxScanMessages: 2 });
+    setWorldStateData({ text: doc, deltaStatus: buildRefreshStatusDelta('full', doc, {}, 0, 'detailed') });
+    const raw = supplied ? `${evidence} ${'x'.repeat(21000)}` : `${'x'.repeat(21000)} ${evidence}`;
+    fake.setFakeChat([{ id: 'big', name: 'Alex', mes: raw }, { id: 'next1', mes: 'She walked home.' },
+        { id: 'next2', mes: 'She went to sleep.' }, { id: 'tail1', mes: 'tail' }, { id: 'tail2', mes: 'tail' }]);
+    await refreshWorldState();
+    expect(requests[0].userContent).toContain('leading portion only');
+    expect(requests[0].userContent.includes(evidence)).toBe(supplied);
+    expect(getLedger().proposals).toHaveLength(supplied ? 1 : 0);
+    if (supplied) expect(getLedger().proposals[0].msg.digest).toBe(ledgerMessageDigest(raw));
+});
+
+test('handoff refuses a stale scope without dispatch', () => {
+    const scope = captureScope();
+    bumpEpoch();
+    const spy = vi.spyOn(document, 'dispatchEvent');
+    publishLedgerReport(cutLedgerReport(report(doc)), [], scope, true);
+    expect(spy).not.toHaveBeenCalled();
+});
+
+test('write-time evidence and currency resolution drop changed or ambiguous claims with counters', async () => {
+    fake.setFakeApi(async () => {
+        fake.getChat().forEach(message => { message.mes = 'Nobody paid anything.'; });
+        return report(doc);
+    });
+    await refreshWorldState();
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()['dropped:evidence']).toBe(1);
+    fake.getChat().forEach(message => { message.mes = evidence; });
+    fake.setFakeApi(async () => {
+        const ledger = getLedger();
+        ledger.currencies.push({ id: 'other-gold', name: 'GOLD', decimals: 0, badge: false });
+        saveLedger(ledger);
+        return report(doc);
+    });
+    await refreshWorldState();
+    expect(getLedger().proposals).toEqual([]);
+    expect(getLedgerDiagnostics()['dropped:currency-ambiguous']).toBe(1);
+});
+
+test('malformed lines do not poison neighbors; overlapping full refreshes dedupe across harvests', async () => {
+    fake.setFakeApi(async () => `${doc}\n\n\`\`\`mwt-ledger-report\nnot JSON\n${JSON.stringify(line)}\n\`\`\``);
+    await refreshWorldState();
+    await refreshWorldState();
+    expect(getLedger().proposals).toHaveLength(1);
+    expect(getLedgerDiagnostics()).toMatchObject({ 'dropped:parse': 2, 'dropped:duplicate': 1, 'lines-kept': 1 });
+});

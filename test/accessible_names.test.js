@@ -24,6 +24,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createFloatingButtonBar, renderApiSettingsFields } from '../core/ui.js';
+import { renderGlobalSettingsForm } from '../core/settings_form.js';
 // The Budget pane renderer, for its DOM-level contract below (the pane the
 // a11y plan's source inventory missed — BUG scope miss filed mid-Slice 4).
 import { renderBudgetSnapshot } from '../budget/panel.js';
@@ -42,6 +43,7 @@ import budgetPanelSource from '../budget/panel.js?raw';
 import schemaStatusSource from '../core/schema_status.js?raw';
 import uiSource from '../core/ui.js?raw';
 import indexSource from '../index.js?raw';
+import settingsFormSource from '../core/settings_form.js?raw';
 
 const SOURCES = {
     'interiority/render.js': interioritySource,
@@ -55,6 +57,7 @@ const SOURCES = {
     'core/schema_status.js': schemaStatusSource,
     'core/ui.js': uiSource,
     'index.js': indexSource,
+    'core/settings_form.js': settingsFormSource,
     'budget/panel.js': budgetPanelSource,
 };
 
@@ -401,6 +404,7 @@ function danglingLabelFors(src) {
 }
 
 const RESWEPT_SOURCES = {
+    'core/settings_form.js': settingsFormSource,
     'backup/render.js': backupSource,
     'chronicle/render.js': chronicleSource,
     'world_state/render.js': worldStateSource,
@@ -434,38 +438,40 @@ describe('re-swept forms associate every label explicitly (Slice 4 item 4)', () 
         expect(interioritySource).toContain('<input type="text" id="${lineId}"');
     });
 
-    test('index.js settings grid: section headers are not empty labels', () => {
+    test('Settings form settings grid: section headers are not empty labels', () => {
         // A <label> that wraps no control and carries no for= is not a label.
         // The four injection-settings group headers and the two world_state-
         // style cell headers are <div class="mwt-label"> instead.
         for (const header of ['World State', 'Chronicle', 'Interiority', 'Structural Boundaries']) {
-            expect(indexSource, header).toContain(
+            expect(settingsFormSource, header).toContain(
                 `<div class="mwt-label" style="grid-column:1/3;font-weight:bold"><span aria-hidden="true">`,
             );
-            expect(indexSource, header).toMatch(new RegExp(`<div class="mwt-label"[^>]*>[^<]*<span aria-hidden="true">[^<]+</span> ${header}</div>`));
+            expect(settingsFormSource, header).toMatch(new RegExp(`<div class="mwt-label"[^>]*>[^<]*<span aria-hidden="true">[^<]+</span> ${header}</div>`));
         }
     });
 
     test('structural-boundary example is escaped inside code markup', () => {
-        expect(indexSource).toContain('&lt;mwt_world_state&gt;…&lt;/mwt_world_state&gt;');
-        expect(indexSource).not.toContain('<code><mwt_world_state>');
+        expect(settingsFormSource).toContain('&lt;mwt_world_state&gt;…&lt;/mwt_world_state&gt;');
+        expect(settingsFormSource).not.toContain('<code><mwt_world_state>');
     });
 
-    test('index.js float-button and per-tracker rows name their checkbox', () => {
+    test('Settings form float-button and per-tracker rows name their checkbox', () => {
+        const root = document.createElement('div');
+        root.innerHTML = renderGlobalSettingsForm({});
         // Both cells label the row's checkbox, so its name carries the module
         // rather than being one of six identical "Visible"s.
         for (const cid of ['mwt-s-show-world', 'mwt-s-show-chronicle', 'mwt-s-show-knowledge',
             'mwt-s-show-story-planner', 'mwt-s-show-interiority', 'mwt-s-show-settings',
             'mwt-s-enable-world', 'mwt-s-enable-chronicle', 'mwt-s-enable-knowledge',
             'mwt-s-enable-story-planner', 'mwt-s-enable-interiority']) {
-            expect(indexSource.match(new RegExp(`for="${cid}"`, 'g'))?.length, cid).toBe(2);
+            expect(root.querySelectorAll(`label[for="${cid}"]`).length, cid).toBe(2);
         }
     });
 
-    test('index.js injection depth/role controls are labelled', () => {
+    test('Settings form injection depth/role controls are labelled', () => {
         for (const pre of ['ws', 'ch', 'int']) {
-            expect(indexSource).toContain(`<label class="mwt-label" for="mwt-s-${pre}-depth">Depth</label>`);
-            expect(indexSource).toContain(`<label class="mwt-label" for="mwt-s-${pre}-role">Role</label>`);
+            expect(settingsFormSource).toContain(`<label class="mwt-label" for="mwt-s-${pre}-depth">Depth</label>`);
+            expect(settingsFormSource).toContain(`<label class="mwt-label" for="mwt-s-${pre}-role">Role</label>`);
         }
     });
 

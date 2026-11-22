@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { resolve } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
-import { acceptedRefreshFields, contractRejectionSummary, validateKnowledgeList } from '../knowledge/field_contract.js';
+import { acceptedRefreshFields, contractRejectionSummary, validateKnowledgeList, FIELD_CONTRACT_BY_KEY } from '../knowledge/field_contract.js';
 
 // Exercise the real UI handlers in isolation from the SillyTavern host.
 const source = readFileSync(resolve(process.cwd(), 'knowledge/render.js'), 'utf8').replace(/\r\n/g, '\n');
@@ -24,13 +24,14 @@ describe('Knowledge contract UI', () => {
         ['legitimate unchanged', ['role'], [], false, ['role']],
     ])('%s refresh only verifies accepted fields', async (_label, requested, rejected, changed, verified) => {
         const modal = document.createElement('div');
-        modal.innerHTML = `<button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>${requested.map(key => `<input class="kt-dfr-field" type="checkbox" data-key="${key}" checked>`).join('')}`;
+        modal.innerHTML = `<button class="kt-dfr-cleanup"></button><button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>${requested.map(key => `<input class="kt-dfr-field" type="checkbox" data-key="${key}" checked>`).join('')}`;
         let handler;
         modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
         const rejections = rejected.map(field => ({ ...rejection, field }));
         const c = {
-            acceptedRefreshFields, contractRejectionSummary,
+            acceptedRefreshFields, contractRejectionSummary, FIELD_CONTRACT_BY_KEY,
             getVectFoxHistoryStatus: () => ({ available: false, reason: 'not loaded' }),
+            extractDossierFieldValues: () => ({}),
             ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(),
             setControlBusy: vi.fn(), addNotificationEntry: vi.fn(), renderNpcsSubTab: vi.fn(),
             isCancellation: () => false, console,
@@ -62,7 +63,7 @@ describe('Knowledge contract UI', () => {
     });
 
     test('staged rejection reasons remain visible and HTML-escaped', () => {
-        const c = { escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
+        const c = { GROWTH_ITEM_TYPE: 'growth-dossier', escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;') };
         loadFunction('function renderDetailForItem(', 'function wireStagingEvents(', c);
         const html = c.renderDetailForItem({ name: 'Mara', proposedContent: 'safe', contractRejections: [{ field: '<role>', reason: '<script>bad</script>' }] });
         expect(html).toContain('Rejected model values');
@@ -72,7 +73,7 @@ describe('Knowledge contract UI', () => {
 
     test('history preview is required and supporting references survive staging', async () => {
         const modal = document.createElement('div');
-        modal.innerHTML = `<button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>
+        modal.innerHTML = `<button class="kt-dfr-cleanup"></button><button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button>
             <input class="kt-dfr-field" type="checkbox" data-key="background" checked>
             <input class="kt-dfr-history-enabled" type="checkbox" checked>
             <select class="kt-dfr-history-scope"><option value="current_chat">Current chat</option></select>
@@ -93,6 +94,7 @@ describe('Knowledge contract UI', () => {
             setControlBusy: vi.fn(), ktSetStatus: vi.fn(), isCancellation: () => false,
             addNotificationEntry: vi.fn(), renderNpcsSubTab: vi.fn(), state: { stagingItems: [] },
             recordDossierFieldRefresh: vi.fn(),
+            FIELD_CONTRACT_BY_KEY, extractDossierFieldValues: () => ({}),
             runDossierFieldRefresh: vi.fn(async () => ({ currentContent: 'old', merged: 'new',
                 requestedFields: ['background'], fields: { background: 'new' }, skippedFields: [],
                 historyEvidence: evidence, historyRevision: 'original' })),
@@ -113,7 +115,8 @@ describe('Knowledge contract UI', () => {
     });
 
     test('supporting history is inspectable and HTML-escaped in review', () => {
-        const c = { escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+        const c = { GROWTH_ITEM_TYPE: 'growth-dossier',
+            escapeHtml: text => String(text).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
             historySummary: () => 'Current chat · 1 selected event' };
         loadFunction('function renderDetailForItem(', 'function wireStagingEvents(', c);
         const html = c.renderDetailForItem({ name: 'Mara', proposedContent: 'safe', historyEvidence: {
@@ -122,6 +125,31 @@ describe('Knowledge contract UI', () => {
         expect(html).toContain('VectFox supporting history');
         expect(html).toContain('&lt;ref&gt;');
         expect(html).not.toContain('<script>');
+    });
+
+    test('over-scan-limit refresh keeps the line and explains why it was not re-verified', async () => {
+        const modal = document.createElement('div');
+        modal.innerHTML = '<button class="kt-dfr-cleanup"></button><button class="kt-dfr-run"></button><button class="kt-dfr-select-stale"></button><button class="kt-dfr-clear"></button><input class="kt-dfr-field" type="checkbox" data-key="personality" checked>';
+        let handler;
+        modal.querySelector('.kt-dfr-run').addEventListener = (_event, fn) => { handler = fn; };
+        const currentContent = `Personality: ${'x'.repeat(1400)}`;
+        const c = {
+            acceptedRefreshFields, contractRejectionSummary, FIELD_CONTRACT_BY_KEY,
+            getVectFoxHistoryStatus: () => ({ available: false, reason: 'not loaded' }),
+            extractDossierFieldValues: () => ({ personality: 'x'.repeat(1400) }),
+            ktSetStatus: vi.fn(), recordDossierFieldRefresh: vi.fn(), setControlBusy: vi.fn(),
+            isCancellation: () => false, console,
+            runDossierFieldRefresh: async () => ({ currentContent, merged: currentContent,
+                fields: { personality: null }, requestedFields: ['personality'], skippedFields: [],
+                contractRejections: [{ field: 'personality', reason: '1400 characters exceeds the 900-character bound' }],
+            }),
+        };
+        loadFunction('function setContractStatus(', '// ─── Accept / reject', c);
+        loadFunction('function wireDossierFieldRefreshModal(', '// ─── Relationship sub-tab', c);
+        c.wireDossierFieldRefreshModal(modal, 'Mara', { uid: 7 }, [], vi.fn());
+        await handler();
+        expect(c.recordDossierFieldRefresh).not.toHaveBeenCalled();
+        expect(c.ktSetStatus.mock.calls[0][0]).toContain('personality kept: current line is over the scan limit (900 characters)');
     });
 
     test.each(['fact', 'source', 'date'])('%s rejects each structural marker and edge line break', part => {

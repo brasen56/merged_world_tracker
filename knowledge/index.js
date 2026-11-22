@@ -17,6 +17,9 @@ import { state, COUNTERS_META_KEY } from './state.js';
 import { getSettings, hasValidSettings, syncGlobalSettings } from './settings.js';
 import { getRegistry, getRegistryEntry, getAllNpcNames, getStateRegistry, bumpStateTrackerTimestamp, adjustStateTrackerLastUpdatedMsg, saveRegistry, resolveRegistryKey } from './registry.js';
 import { loadEntryContent, loadStateTrackerEntry, runScan, runStateUpdate, queueTrackerWork, getRecentMessages, enrichStagingItem } from './lorebook.js';
+
+// Startup (root index.js) runs this once per page load, after a delay.
+export { compactStoredHistories } from './lorebook.js';
 import { registerSafeCharacterContextProvider } from '../core/index.js';
 import { buildPlannerCharacterContext, buildPlannerAuthorContext, listPlannerCharacterCandidates, resolvePlannerCharacterEntities } from './planner_context.js';
 import { buildStagingItems, mergeScanResults } from './staging.js';
@@ -624,7 +627,7 @@ export function onChatChanged() {
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind — a bare remove() leaks it.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal').forEach(m => {
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal, #kt-field-cleanup-modal').forEach(m => {
         // Use the shared close path so the modal stack restores body inertness
         // before the old-chat node is discarded. Direct remove() leaves the
         // remaining application inert when this was the topmost dialog.
@@ -678,7 +681,7 @@ export function onChatChangedWhilePaused() {
     // _cleanupKeyHandler first (the core/modal.js convention) so the sweep
     // also detaches any document-level Escape listener a removed modal left
     // behind.
-    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal').forEach(m => {
+    document.querySelectorAll('#kt-view-modal, #kt-growth-modal, #kt-dossier-refresh-modal, #kt-identity-modal, #kt-ledger-review-modal, #kt-cleanup-recovery-modal, #kt-deep-consolidation-modal, #kt-field-cleanup-modal').forEach(m => {
         if (typeof m._closeModal === 'function') m._closeModal();
         else { m._cleanupKeyHandler?.(); m.remove(); }
     });
@@ -914,6 +917,11 @@ export async function scanAndAccept() {
     const skips = [];
 
     for (const item of items) {
+        if (item.type === 'growth-dossier') {
+            item.skipReason = 'Growth proposals require individual review and acceptance.';
+            skips.push(`"${item.name}" — ${item.skipReason}`);
+            continue;
+        }
         // May convert a create into an update when the entry already exists.
         await enrichStagingItem(item);
 

@@ -60,6 +60,8 @@ export const SCHEMA_STATUS_LABELS = Object.freeze({
     knowledgeCounters: '🧠 Knowledge counters',
     storyPlanner: '🗺️ Story Planner',
     interiority: '🎭 Interiority',
+    calendar: '📅 Calendar',
+    ambient: '🌦️ Ambient Conditions',
     knowledgeStore: '🧠 Knowledge lorebook store',
 });
 

@@ -68,6 +68,16 @@ const _lastRuns = Object.create(null);
 /** API call summaries, oldest first. The event ring also receives each summary. */
 let _apiCalls = [];
 
+// Session totals survive ring-buffer eviction, but never page reloads.
+const ledgerCounters = Object.create(null);
+export function countLedgerDiagnostic(name, amount = 1) {
+    try {
+        ledgerCounters[name] = (ledgerCounters[name] ?? 0) + amount;
+        record({ module: 'ledger', event: 'ledger_measurement', detail: { counter: name, amount, total: ledgerCounters[name] } });
+    } catch { /* instrumentation is never a feature failure */ }
+}
+export function getLedgerDiagnostics() { return { ...ledgerCounters }; }
+
 /** Most recent API call per module key. Values are copies of entries in _apiCalls. */
 const _lastApiCalls = Object.create(null);
 
@@ -427,6 +437,7 @@ export function _setScopeKeyResolver(fn) {
  * @internal — test isolation only; production code must not call this.
  */
 export function _resetDiagnostics() {
+    for (const key of Object.keys(ledgerCounters)) delete ledgerCounters[key];
     _events = [];
     _eventSeq = 0;
     clearApiCalls();
