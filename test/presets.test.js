@@ -42,6 +42,8 @@ const TABLE = {
         npcAutoScanEveryN: [null, null, 10],
         growthAutoCaptureEnabled: [false, false, true],
         growthAutoCaptureEveryN: [null, null, 15],
+        growthAutoConsolidationEnabled: [false, false, true],
+        growthAutoConsolidationThreshold: [null, null, 100],
         relationshipAutoExtractEnabled: [false, false, true],
         relationshipAutoExtractEveryN: [null, null, 10],
     },

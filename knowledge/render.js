@@ -1352,6 +1352,10 @@ async function openGrowthProfileModal(name, triggerBtn) {
         const modal = document.createElement('div');
         modal.id = 'kt-growth-modal';
         modal.className = 'mwt-modal kt-growth-modal';
+        // Which NPC this modal is showing — refreshOpenGrowthModal reads it to
+        // decide whether outside work (the auto-consolidation driver) changed
+        // the evidence THIS modal is displaying.
+        modal.dataset.npc = name;
         modal.style.display = 'flex';
         modal.innerHTML = `
             <div class="mwt-modal-backdrop"></div>
@@ -1436,6 +1440,23 @@ async function refreshGrowthModalContent(modal, name, triggerBtn, flashMsg) {
         // assignment the Growth modal's custom shell never announced.
         setStatus(modal, flashMsg, 'success', 3000);
     }
+}
+
+/**
+ * Refresh the open Growth Profile modal after OUTSIDE work (the
+ * auto-consolidation driver) changed its NPC's evidence, so the counts it
+ * shows stay true without the user reopening it. No-op unless the modal is
+ * open AND currently showing this NPC.
+ *
+ * @param {string} name — the NPC whose evidence changed
+ * @param {string} [flashMsg] — optional status-bar message
+ * @returns {Promise<boolean>} true when a modal was refreshed
+ */
+export async function refreshOpenGrowthModal(name, flashMsg) {
+    const modal = document.getElementById('kt-growth-modal');
+    if (!modal || modal.dataset.npc !== name) return false;
+    await refreshGrowthModalContent(modal, name, null, flashMsg);
+    return true;
 }
 
 /**
@@ -1865,6 +1886,13 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
                 addedText = `No new observations found${captureStats.skipped > 0 ? ` (${captureStats.skipped} duplicate${captureStats.skipped !== 1 ? 's' : ''} already captured)` : ''}.`;
             }
             await refreshGrowthModalContent(modal, name, triggerBtn, addedText);
+            // Auto-consolidation (opt-in): a capture just grew the raw pool —
+            // give the backlog driver its chance. Fire-and-forget; it gates
+            // and serializes itself, toasts its own outcomes, and refreshes
+            // this modal via refreshOpenGrowthModal if a pass ran for this NPC.
+            import('./auto_consolidation.js')
+                .then(({ maybeRunAutoConsolidation }) => maybeRunAutoConsolidation('capture'))
+                .catch(() => { /* the driver reports its own failures */ });
         } catch (err) {
             flash(`Capture failed: ${err.message}`, 'error');
         } finally {
@@ -1952,6 +1980,11 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
                 ? `Backfill complete: expanded ${result.expandedSummaries} summary(ies), +${result.added} observation(s).`
                 : `Backfill: no new observations (${result.expandedSummaries} summary(ies) expanded, ${result.skipped} duplicate(s)).`;
             await refreshGrowthModalContent(modal, name, triggerBtn, msg);
+            // Auto-consolidation (opt-in): backfill grew the raw pool — see
+            // the Capture handler above for the fire-and-forget contract.
+            import('./auto_consolidation.js')
+                .then(({ maybeRunAutoConsolidation }) => maybeRunAutoConsolidation('backfill'))
+                .catch(() => { /* the driver reports its own failures */ });
         } catch (err) {
             flash(`Backfill failed: ${err.message}`, 'error');
             setControlBusy(btn, false); btn.innerHTML = '<span aria-hidden="true">📦</span> Backfill';
@@ -2044,6 +2077,14 @@ function wireGrowthProfileEvents(modal, name, profile, triggerBtn) {
             } else {
                 notify('Knowledge Tracker', `Catch-up finished for ${name}: +${result.added} observation(s).`, result.added > 0 ? 'success' : 'info');
             }
+            // Auto-consolidation (opt-in): catch-up can add a large batch of
+            // raw evidence — see the Capture handler for the contract. Fired
+            // even on a no-op catch-up: the check is cheap and it's what
+            // drains a pre-existing backlog on the first capture after the
+            // feature is enabled.
+            import('./auto_consolidation.js')
+                .then(({ maybeRunAutoConsolidation }) => maybeRunAutoConsolidation('catch-up'))
+                .catch(() => { /* the driver reports its own failures */ });
         } catch (err) {
             flash(`Catch-up failed: ${err.message}`, 'error');
             notify('Knowledge Tracker', `Catch-up failed for ${name}: ${err.message}`, 'error');

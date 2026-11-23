@@ -50,6 +50,8 @@ table.
 | `mwt_knowledge` · `npcAutoScanEveryN` (`10`) | — | — | 10 |
 | `mwt_knowledge` · `growthAutoCaptureEnabled` (`false`) | false | false | **true** |
 | `mwt_knowledge` · `growthAutoCaptureEveryN` (`15`) | — | — | 15 |
+| `mwt_knowledge` · `growthAutoConsolidationEnabled` (`false`, `knowledge/auto_consolidation.js`) | false | false | **true** |
+| `mwt_knowledge` · `growthAutoConsolidationThreshold` (`100`) | — | — | 100 |
 | `mwt_knowledge` · `relationshipAutoExtractEnabled` (`false`) | false | false | **true** |
 | `mwt_knowledge` · `relationshipAutoExtractEveryN` (`10`) | — | — | 10 |
 | `mwt_story_planner` · `autoEnabled` (`false`, `story_planner/settings.js`) | false | false | false |

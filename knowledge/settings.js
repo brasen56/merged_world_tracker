@@ -76,6 +76,17 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // addition to the completion toast. Off by default (noisy in normal
         // roleplay). Completion toasts for actual results/errors always fire.
         growthDebugToasts: false,
+        // Automatic consolidation of the raw evidence backlog (opt-in). When
+        // ON, after any capture completes, each NPC whose non-canon raw count
+        // has crossed the threshold gets a bounded consolidation pass
+        // (oldest-first batches), so raw observations don't pile up while
+        // nobody is looking. Manages the raw tier ONLY — the consolidated and
+        // archived tiers keep growing unbounded, and profiles / dossier lines
+        // are never touched automatically. The trigger requires new evidence
+        // since the previous pass and backs off after failures; see
+        // auto_consolidation.js for the full contract.
+        growthAutoConsolidationEnabled: false,
+        growthAutoConsolidationThreshold: 100,
         // When ON, the AI-played cast is treated as trackable NPCs rather than
         // excluded as "player names". Lets non-scenario cards flow into the
         // registry so growth profiles and relationships apply to them. Only the
@@ -191,6 +202,13 @@ export function showKnowledgeSettings() {
             </div>
         </div>
         <div style="margin-top:12px">
+            <label for="kt-cfg-growth-consolidate-auto"><input type="checkbox" id="kt-cfg-growth-consolidate-auto" ${s.growthAutoConsolidationEnabled ? 'checked' : ''}> <span aria-hidden="true">🌿</span> Auto-consolidate raw evidence (backlog management)</label>
+            <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-growth-consolidate-threshold">When an NPC's raw observations reach <input type="number" id="kt-cfg-growth-consolidate-threshold" class="mwt-input" style="width:70px;display:inline-block" value="${s.growthAutoConsolidationThreshold || 100}" min="10" max="1000"></label>
+            </div>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, a consolidation pass runs automatically after any capture once an NPC's raw observations cross the threshold, draining in bounded batches (oldest first) until back below it. A pass only fires when evidence the previous pass never saw has arrived, and failed passes back off — uncited observations stay raw, nothing is deleted, and profiles / dossier lines are never touched automatically. 100 is a good default for long-running chats; raise it for NPCs that routinely carry a larger raw pool.</p>
+        </div>
+        <div style="margin-top:12px">
             <label for="kt-cfg-track-mainchar"><input type="checkbox" id="kt-cfg-track-mainchar" ${s.trackMainCharAsNpc ? 'checked' : ''}> <span aria-hidden="true">🎭</span> Track AI characters ({{char}} + group members) as NPCs</label>
             <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, the AI-played cast is no longer excluded from scans — the character card ({{char}}), <em>and every member of a group chat</em>, flow into the NPC registry like any other character, so growth profiles and relationships apply to them too. Only {{user}} stays excluded. Useful for non-scenario cards where the character itself is the focus, and for group chats where you want relationships tracked between the cast.</p>
         </div>
@@ -239,6 +257,10 @@ export function showKnowledgeSettings() {
             growthAutoCaptureEnabled: el.querySelector('#kt-cfg-growth-auto')?.checked ?? false,
             growthAutoCaptureEveryN: Number(el.querySelector('#kt-cfg-growth-every')?.value) || 15,
             growthDebugToasts: el.querySelector('#kt-cfg-growth-debug')?.checked ?? false,
+            growthAutoConsolidationEnabled: el.querySelector('#kt-cfg-growth-consolidate-auto')?.checked ?? false,
+            // Clamp to the input's bounds — a hand-edited value outside
+            // 10–1000 would silently arm (or disarm) the trigger.
+            growthAutoConsolidationThreshold: Math.min(1000, Math.max(10, Number(el.querySelector('#kt-cfg-growth-consolidate-threshold')?.value) || 100)),
             trackMainCharAsNpc: el.querySelector('#kt-cfg-track-mainchar')?.checked ?? false,
             relationshipAutoExtractEnabled: el.querySelector('#kt-cfg-rel-auto')?.checked ?? false,
             relationshipAutoExtractEveryN: Number(el.querySelector('#kt-cfg-rel-every')?.value) || 10,

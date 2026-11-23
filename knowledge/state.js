@@ -120,6 +120,16 @@ export const state = {
     isRunning: false,
     trackerQueue: Promise.resolve(),
 
+    /** NPC names with a consolidation pass currently in flight (manual OR
+     *  automatic — see growth.js runConsolidation). Keyed by name so a manual
+     *  Consolidate click and the auto-consolidation driver can never run
+     *  overlapping passes over the same evidence file. */
+    consolidationInFlight: new Set(),
+    /** True while an auto-consolidation scan is running. Several seams call
+     *  maybeRunAutoConsolidation after a capture completes (auto_consolidation.js),
+     *  and this keeps concurrent calls from stacking scans. */
+    autoConsolidationScanInFlight: false,
+
     // ── Token tracking ──
     _cachedTokenCount: 0,
     _refreshingTokens: false,

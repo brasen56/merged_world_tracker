@@ -52,6 +52,7 @@ import { buildProfileEvidenceView, formatProfileEvidence, formatConsolidationEvi
 // own pause imports.
 import { isModulePausedForCurrentScope } from '../core/schema_status.js';
 import { hasValidSettings } from './settings.js';
+import { state } from './state.js';
 import { getRegistry, getProfileUid, setProfileUid } from './registry.js';
 import { loadEntryContent, loadProfileContent, writeProfileToLorebook, ktFetchFromApi } from './lorebook.js';
 import { flushBook } from './store.js';
@@ -728,12 +729,17 @@ export async function runCaptureOnly(name) {
  * The leaf invariant is preserved: consolidated claims are evidence-derived.
  *
  * @param {string} name — NPC name
- * @returns {Promise<Array<{category:string, claim:string, sources:number[], confidence?:string}>>}
+ * @param {{limit?:number, trigger?:string}} [opts] — `limit` bounds the pass
+ *   to the oldest N non-canon raw observations (the automatic backlog
+ *   driver's batch bound; manual passes present the whole pool). `trigger`
+ *   drives the coordinator's classification — automatic passes pass 'auto'
+ *   so they run as background work and yield to user generations.
+ * @returns {Promise<{consolidated:Array<{category:string, claim:string, sources:number[], confidence?:string}>, sourceIds:string[]}>}
  */
-export async function consolidateEvidence(name) {
+export async function consolidateEvidence(name, { limit, trigger } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
-    const rawForCon = getRawForConsolidation(name);
+    const rawForCon = getRawForConsolidation(name, { limit });
     if (rawForCon.length === 0) {
         throw new Error(`No raw observations to consolidate for "${name}". (Canon-flagged observations are excluded from consolidation.)`);
     }
@@ -759,7 +765,7 @@ export async function consolidateEvidence(name) {
         `Consolidate the raw observations for ${name}. Output only JSON.`,
     ].join('\n');
 
-    const rawResponse = await ktFetchFromApi(GROWTH_CONSOLIDATION_PROMPT, userContent, { retries: 1 });
+    const rawResponse = await ktFetchFromApi(GROWTH_CONSOLIDATION_PROMPT, userContent, { retries: 1, trigger: trigger ?? null });
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
@@ -776,23 +782,39 @@ export async function consolidateEvidence(name) {
  * Repeatable: each pass distills only the raw observations captured since the
  * last one and APPENDS its claims, so earlier eras of the character survive.
  *
+ * Per-NPC overlap guard: manual clicks and the automatic backlog driver
+ * (auto_consolidation.js) both end up here, and two concurrent passes over
+ * one evidence file would race the staged map. The manual button disables
+ * itself while running; this guard covers every other combination.
+ *
  * @param {string} name — NPC name
+ * @param {{limit?:number, trigger?:string}} [opts] — threaded to
+ *   {@link consolidateEvidence}; see there.
  * @returns {Promise<{consolidatedCount:number, archivedCount:number, totalConsolidated:number, consolidated:Array}>}
  *   `consolidatedCount` counts the claims added by this pass; `totalConsolidated`
  *   is the size of the tier afterwards.
+ * @throws {Error} when a pass is already in flight for this NPC
  */
-export async function runConsolidation(name) {
+export async function runConsolidation(name, opts = {}) {
     refuseIfGrowthPaused();
-    const scopeBefore = captureScope();
-    const registry = getRegistry();
-    const info = registry[name];
-    if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
+    if (state.consolidationInFlight.has(name)) {
+        throw new Error(`A consolidation pass is already running for "${name}".`);
+    }
+    state.consolidationInFlight.add(name);
+    try {
+        const scopeBefore = captureScope();
+        const registry = getRegistry();
+        const info = registry[name];
+        if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
 
-    const { consolidated, sourceIds } = await consolidateEvidence(name);
-    if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during consolidation — result discarded.');
-    const stats = applyConsolidation(name, consolidated, sourceIds);
+        const { consolidated, sourceIds } = await consolidateEvidence(name, { limit: opts.limit, trigger: opts.trigger });
+        if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during consolidation — result discarded.');
+        const stats = applyConsolidation(name, consolidated, sourceIds);
 
-    return { ...stats, consolidated };
+        return { ...stats, consolidated };
+    } finally {
+        state.consolidationInFlight.delete(name);
+    }
 }
 
 // ─── Profile regeneration from existing evidence (Slice 3) ───────────────────

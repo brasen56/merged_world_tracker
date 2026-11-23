@@ -43,6 +43,8 @@ function makePreset(name) {
             ...(full ? { npcAutoScanEveryN: 10 } : {}),
             growthAutoCaptureEnabled: full,
             ...(full ? { growthAutoCaptureEveryN: 15 } : {}),
+            growthAutoConsolidationEnabled: full,
+            ...(full ? { growthAutoConsolidationThreshold: 100 } : {}),
             relationshipAutoExtractEnabled: full,
             ...(full ? { relationshipAutoExtractEveryN: 10 } : {}),
         },

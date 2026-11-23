@@ -173,13 +173,17 @@ describe('Module 3 review — regression probes', () => {
         const c = { refuseIfGrowthPaused() {}, captureScope: () => scope,
             scopeStillCurrent: token => ({ ok: token === scope }), getRegistry: () => ({ Mara: { uid: 1 } }),
             consolidateEvidence: () => new Promise(resolve => { complete = resolve; }),
-            applyConsolidation: () => { writtenScope = scope; return {}; } };
+            applyConsolidation: () => { writtenScope = scope; return {}; },
+            // runConsolidation's per-NPC overlap guard (auto-consolidation).
+            state: { consolidationInFlight: new Set() } };
         load('growth.js', 'export async function runConsolidation(', '// ─── Profile regeneration', c);
         const pending = c.runConsolidation('Mara');
         scope = 'B';
         complete({ consolidated: [], sourceIds: [] });
         await expect(pending).rejects.toThrow(/Chat changed/);
         expect(writtenScope).toBeUndefined();
+        // The finally clause releases the guard even on the failure path.
+        expect(c.state.consolidationInFlight.has('Mara')).toBe(false);
     });
 
     // NK-07 (fixed in 2.10.2): an imported UID is kept only when the entry it

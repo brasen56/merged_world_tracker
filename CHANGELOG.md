@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
+## [Unreleased]
+
+### Added
+
+- **🌿 Auto-consolidate raw evidence (Knowledge, opt-in).** After any capture completes — the auto-capture cadence or the manual Capture / Backfill / Catch Up buttons — each NPC whose raw observations cross a user-chosen threshold (default 100, range 10–1000) gets the same consolidation pass as the manual button, automatically: bounded batches of the oldest observations (≤150 per call, ≤3 batches per NPC per scan) drain the backlog until it's back below the threshold.
+  - **No naive count trigger.** Uncited observations stay raw, so a pass that leaves an NPC above the threshold would re-fire forever on a bare `raw count >= threshold` check. Instead a pass only re-arms when evidence no previous pass *saw* has arrived (a watermark over the monotonically rising raw ids), and repeated failures back off by requiring progressively more new evidence (20 / 40 / 80, capped).
+  - **Overlap-safe and scope-safe:** a per-NPC in-flight guard prevents manual and automatic passes from racing, automatic calls run as background work that yields to user generations, and a chat switch discards the scan quietly.
+  - **Backlog management only:** the consolidated and archived tiers keep growing unbounded, profiles and dossier lines are never touched automatically, uncited observations stay raw, and nothing is ever deleted (Expand still undoes any claim). Manual Consolidate is unchanged (whole pool, one call). Full contract: [docs/GROWTH_AUTO_CONSOLIDATION_SCOPE.md](docs/GROWTH_AUTO_CONSOLIDATION_SCOPE.md).
+
 ## [2.20.0]
 
 ### Added

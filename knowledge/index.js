@@ -330,6 +330,14 @@ export function onMessageReceived({ countMessage = true } = {}) {
             }
             // No toast for "attempted but found nothing" — that's the quiet
             // no-op path. Errors (above) are the exception.
+
+            // Auto-consolidation (opt-in): the capture changed the raw pool,
+            // so this is the moment to check whether any NPC crossed its
+            // backlog threshold. Fire-and-forget — the driver gates itself,
+            // serializes per NPC, and reports through its own toasts.
+            import('./auto_consolidation.js')
+                .then(({ maybeRunAutoConsolidation }) => maybeRunAutoConsolidation('auto-capture'))
+                .catch(err => console.warn('[MWT:Knowledge] Auto-consolidation check failed:', err?.message || err));
         }).catch(async err => {
             // Coordinator cancellation (TODO §1): chat changed mid-run (or an
             // explicit cancel) and runContinuousCaptureAll rethrew to stop the

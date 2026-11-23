@@ -632,10 +632,25 @@ function obsIdSequence(file, tier) {
         : (file.consolidated || []);
     let max = 0;
     for (const entry of scan) {
-        const m = String(entry.id || '').match(/\d+$/);
-        if (m) max = Math.max(max, parseInt(m[0], 10));
+        const seq = obsSeq(entry.id);
+        if (seq != null) max = Math.max(max, seq);
     }
     return () => `${prefix}${String(++max).padStart(3, '0')}`;
+}
+
+/**
+ * Numeric suffix of an observation/claim id ("obs-007" → 7); null when the id
+ * has no trailing digits. Raw ids are minted from a sequence that scans
+ * raw ∪ archivedRaw, so the value rises monotonically as evidence arrives —
+ * the property the auto-consolidation watermark relies on to mean "evidence
+ * no previous pass has seen" (auto_consolidation.js).
+ *
+ * @param {string} id
+ * @returns {number|null}
+ */
+export function obsSeq(id) {
+    const m = String(id || '').match(/\d+$/);
+    return m ? parseInt(m[0], 10) : null;
 }
 
 /**
@@ -854,21 +869,26 @@ export function toggleCanon(name, id, value) {
  * They remain in raw[] and are passed to the profile generator separately.
  *
  * @param {string} name — NPC name
+ * @param {{limit?:number}} [opts] — `limit` bounds the pass to the oldest N
+ *   non-canon raw observations (the auto-consolidation batch bound). raw[] is
+ *   append-ordered, so the first N entries are the oldest captured — a
+ *   limited pass drains the backlog oldest-first. Absent = present the whole
+ *   pool (the manual button's behaviour, unchanged).
  * @returns {Array<{numericId:number, id:string, category:string, claim:string, quote:string, canon:boolean}>}
  */
-export function getRawForConsolidation(name) {
+export function getRawForConsolidation(name, { limit } = {}) {
     const file = getEvidenceFile(name, false);
     if (!file) return [];
-    return (file.raw || [])
-        .filter(o => !o.canon) // canon stays raw, never consolidated away
-        .map((o, i) => ({
-            numericId: i + 1,
-            id: o.id,
-            category: validCategory(o.category),
-            claim: o.claim,
-            quote: o.quote,
-            canon: !!o.canon,
-        }));
+    let nonCanon = (file.raw || []).filter(o => !o.canon); // canon stays raw, never consolidated away
+    if (Number.isFinite(limit) && limit > 0) nonCanon = nonCanon.slice(0, Math.trunc(limit));
+    return nonCanon.map((o, i) => ({
+        numericId: i + 1,
+        id: o.id,
+        category: validCategory(o.category),
+        claim: o.claim,
+        quote: o.quote,
+        canon: !!o.canon,
+    }));
 }
 
 /**
@@ -975,12 +995,91 @@ export function applyConsolidation(name, consolidated, sourceIds) {
     // never be a replacement.
     file.consolidated.push(...newConsolidated);
 
+    // Auto-consolidation watermark: this pass PRESENTED every id in
+    // numericToId to the consolidator, so a later automatic pass must wait
+    // for evidence with a higher id before this file's trigger can fire
+    // again ("new evidence since the previous attempt"). Only a pass that
+    // distilled at least one claim advances it — a zero-yield pass leaves
+    // the watermark alone so the same pool can be retried (under backoff)
+    // once more evidence accumulates. Manual passes stamp the same
+    // watermark: the semantics are "evidence a pass has seen", regardless
+    // of who started the pass.
+    if (newConsolidated.length > 0) {
+        let maxSeq = 0;
+        for (const id of numericToId.values()) {
+            const seq = obsSeq(id);
+            if (seq != null) maxSeq = Math.max(maxSeq, seq);
+        }
+        const acMeta = ensureAutoConsolidationMeta(file);
+        if (maxSeq > (Number.isFinite(acMeta.watermark) ? acMeta.watermark : 0)) {
+            acMeta.watermark = maxSeq;
+        }
+    }
+
     if (!touch(file).ok) throw new Error('Consolidated evidence could not be saved.');
     return {
         consolidatedCount: newConsolidated.length,
         archivedCount,
         totalConsolidated: file.consolidated.length,
     };
+}
+
+// ─── Auto-consolidation bookkeeping (backlog management) ─────────────────────
+
+/**
+ * Defensive read of an evidence file's auto-consolidation state. The
+ * container only exists once a consolidation pass has stamped it, and every
+ * pre-feature file predates it entirely, so readers must tolerate
+ * absent/partial state.
+ *
+ * @param {EvidenceFile} file
+ * @returns {{watermark:number, failures:number}} `watermark` = highest raw-id
+ *   sequence a consolidation pass has presented (and distilled at least one
+ *   claim from); `failures` = consecutive automatic passes that errored or
+ *   yielded no admissible claims.
+ */
+export function readAutoConsolidationState(file) {
+    const meta = file?.meta?.autoConsolidation;
+    const watermark = Number.isFinite(meta?.watermark) ? meta.watermark : 0;
+    const failures = Number.isFinite(meta?.failures) ? Math.max(0, Math.trunc(meta.failures)) : 0;
+    return { watermark, failures };
+}
+
+/** Create (or return) the file's autoConsolidation meta container. */
+function ensureAutoConsolidationMeta(file) {
+    if (!file.meta || typeof file.meta !== 'object') file.meta = {};
+    const existing = file.meta.autoConsolidation;
+    if (existing !== null && typeof existing === 'object' && !Array.isArray(existing)) return existing;
+    return (file.meta.autoConsolidation = { watermark: 0, failures: 0, lastAttemptAt: null, lastSuccessAt: null });
+}
+
+/**
+ * Stamp the outcome of an AUTOMATIC consolidation attempt. Manual passes
+ * never call this — their watermark advance happens inside
+ * {@link applyConsolidation}, and the failure count only gates the automatic
+ * trigger.
+ *
+ * `ok: true`  — the pass distilled at least one claim: reset the failures.
+ * `ok: false` — the pass errored or returned nothing admissible: count it, so
+ *   the evidence-denominated backoff (auto_consolidation.js backoffRequired)
+ *   raises the bar for the next attempt.
+ *
+ * @param {string} name — NPC name
+ * @param {{ok:boolean}} outcome
+ * @returns {boolean} true when the stamp was saved
+ */
+export function recordAutoConsolidationOutcome(name, { ok }) {
+    const file = getEvidenceFile(name, false);
+    if (!file) return false;
+    const meta = ensureAutoConsolidationMeta(file);
+    meta.lastAttemptAt = Date.now();
+    if (ok) {
+        meta.failures = 0;
+        meta.lastSuccessAt = Date.now();
+    } else {
+        meta.failures = readAutoConsolidationState(file).failures + 1;
+    }
+    return touch(file).ok;
 }
 
 /**
@@ -1036,18 +1135,35 @@ export function expandConsolidated(name, id) {
     if (!con) return false;
 
     // Restore archived source observations to raw[]
+    const restoredIds = [];
     if (Array.isArray(con.sources)) {
         for (const sourceId of con.sources) {
             const archivedIdx = (file.archivedRaw || []).findIndex(o => o.id === sourceId);
             if (archivedIdx !== -1) {
                 file.raw.push(file.archivedRaw[archivedIdx]);
                 file.archivedRaw.splice(archivedIdx, 1);
+                restoredIds.push(sourceId);
             }
         }
     }
 
     // Remove the consolidated entry
     file.consolidated = (file.consolidated || []).filter(c => c.id !== id);
+
+    // The restored observations re-enter raw[] with their ORIGINAL ids. The
+    // pass that consumed them had "seen" them, so if the auto-consolidation
+    // watermark sits at/above any restored id, lower it beneath the oldest
+    // restored one — otherwise the auto trigger would ignore this undone
+    // work until evidence newer than the undone pass arrived.
+    const acMeta = file.meta?.autoConsolidation;
+    if (restoredIds.length > 0 && acMeta != null && typeof acMeta === 'object' && Number.isFinite(acMeta.watermark)) {
+        let minSeq = null;
+        for (const rid of restoredIds) {
+            const seq = obsSeq(rid);
+            if (seq != null && (minSeq == null || seq < minSeq)) minSeq = seq;
+        }
+        if (minSeq != null && minSeq - 1 < acMeta.watermark) acMeta.watermark = Math.max(0, minSeq - 1);
+    }
     return touch(file).ok;
 }
 
