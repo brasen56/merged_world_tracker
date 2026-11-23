@@ -729,17 +729,19 @@ export async function runCaptureOnly(name) {
  * The leaf invariant is preserved: consolidated claims are evidence-derived.
  *
  * @param {string} name — NPC name
- * @param {{limit?:number, trigger?:string}} [opts] — `limit` bounds the pass
- *   to the oldest N non-canon raw observations (the automatic backlog
- *   driver's batch bound; manual passes present the whole pool). `trigger`
- *   drives the coordinator's classification — automatic passes pass 'auto'
- *   so they run as background work and yield to user generations.
+ * @param {{limit?:number, unseenOnly?:boolean, trigger?:string}} [opts] — the
+ *   automatic backlog driver's selection: `unseenOnly` presents only the
+ *   observations no earlier pass has seen (lowest id first) and `limit` caps
+ *   the batch; manual passes pass neither and present the whole pool. See
+ *   getRawForConsolidation. `trigger` drives the coordinator's classification
+ *   — automatic passes pass 'auto' so they run as background work and yield
+ *   to user generations.
  * @returns {Promise<{consolidated:Array<{category:string, claim:string, sources:number[], confidence?:string}>, sourceIds:string[]}>}
  */
-export async function consolidateEvidence(name, { limit, trigger } = {}) {
+export async function consolidateEvidence(name, { limit, unseenOnly = false, trigger } = {}) {
     if (!hasValidSettings()) throw new Error('No API connection configured.');
 
-    const rawForCon = getRawForConsolidation(name, { limit });
+    const rawForCon = getRawForConsolidation(name, { limit, unseenOnly });
     if (rawForCon.length === 0) {
         throw new Error(`No raw observations to consolidate for "${name}". (Canon-flagged observations are excluded from consolidation.)`);
     }
@@ -769,8 +771,16 @@ export async function consolidateEvidence(name, { limit, trigger } = {}) {
     const cleaned = normaliseOutput(rawResponse);
     const result = parseJsonLenient(cleaned);
 
-    const consolidated = Array.isArray(result.consolidated) ? result.consolidated : [];
-    return { consolidated, sourceIds };
+    // A reply without a `consolidated` list is a malformed answer, not "the
+    // model found nothing": throw rather than return an empty pass. An empty
+    // pass still advances the auto-consolidation watermark (the model saw the
+    // batch), so treating a malformed reply as one would mark a whole batch
+    // as seen that no model actually evaluated. Throwing keeps the watermark
+    // where it was, so the batch is retried.
+    if (!Array.isArray(result?.consolidated)) {
+        throw new Error('The consolidation reply had no "consolidated" list — nothing was applied.');
+    }
+    return { consolidated: result.consolidated, sourceIds };
 }
 
 /**
@@ -788,8 +798,8 @@ export async function consolidateEvidence(name, { limit, trigger } = {}) {
  * itself while running; this guard covers every other combination.
  *
  * @param {string} name — NPC name
- * @param {{limit?:number, trigger?:string}} [opts] — threaded to
- *   {@link consolidateEvidence}; see there.
+ * @param {{limit?:number, unseenOnly?:boolean, trigger?:string}} [opts] —
+ *   threaded to {@link consolidateEvidence}; see there.
  * @returns {Promise<{consolidatedCount:number, archivedCount:number, totalConsolidated:number, consolidated:Array}>}
  *   `consolidatedCount` counts the claims added by this pass; `totalConsolidated`
  *   is the size of the tier afterwards.
@@ -798,7 +808,9 @@ export async function consolidateEvidence(name, { limit, trigger } = {}) {
 export async function runConsolidation(name, opts = {}) {
     refuseIfGrowthPaused();
     if (state.consolidationInFlight.has(name)) {
-        throw new Error(`A consolidation pass is already running for "${name}".`);
+        // "or queued": an automatic pass holds the guard from the moment it is
+        // submitted, and background calls wait while the user is generating.
+        throw new Error(`A consolidation pass for "${name}" is already running or queued — try again once it finishes.`);
     }
     state.consolidationInFlight.add(name);
     try {
@@ -807,7 +819,9 @@ export async function runConsolidation(name, opts = {}) {
         const info = registry[name];
         if (!info) throw new Error(`"${name}" is not in the NPC registry.`);
 
-        const { consolidated, sourceIds } = await consolidateEvidence(name, { limit: opts.limit, trigger: opts.trigger });
+        const { consolidated, sourceIds } = await consolidateEvidence(name, {
+            limit: opts.limit, unseenOnly: opts.unseenOnly === true, trigger: opts.trigger,
+        });
         if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during consolidation — result discarded.');
         const stats = applyConsolidation(name, consolidated, sourceIds);
 

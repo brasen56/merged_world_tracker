@@ -77,13 +77,14 @@ const { getSettings, saveSettings, hasValidSettings } = createSettingsManager({
         // roleplay). Completion toasts for actual results/errors always fire.
         growthDebugToasts: false,
         // Automatic consolidation of the raw evidence backlog (opt-in). When
-        // ON, after any capture completes, each NPC whose non-canon raw count
-        // has crossed the threshold gets a bounded consolidation pass
-        // (oldest-first batches), so raw observations don't pile up while
-        // nobody is looking. Manages the raw tier ONLY — the consolidated and
-        // archived tiers keep growing unbounded, and profiles / dossier lines
-        // are never touched automatically. The trigger requires new evidence
-        // since the previous pass and backs off after failures; see
+        // ON, after any capture completes, each NPC with at least `threshold`
+        // raw observations that no consolidation pass has looked at yet gets
+        // a bounded pass over exactly those (lowest id first), so new evidence
+        // doesn't pile up while nobody is looking. Uncited observations a pass
+        // already saw stay raw and never count. Manages the raw tier ONLY —
+        // the consolidated and archived tiers keep growing unbounded, and
+        // profiles / dossier lines are never touched automatically. Backs off
+        // after failures and spends at most a few calls per capture; see
         // auto_consolidation.js for the full contract.
         growthAutoConsolidationEnabled: false,
         growthAutoConsolidationThreshold: 100,
@@ -204,9 +205,9 @@ export function showKnowledgeSettings() {
         <div style="margin-top:12px">
             <label for="kt-cfg-growth-consolidate-auto"><input type="checkbox" id="kt-cfg-growth-consolidate-auto" ${s.growthAutoConsolidationEnabled ? 'checked' : ''}> <span aria-hidden="true">🌿</span> Auto-consolidate raw evidence (backlog management)</label>
             <div style="margin-top:6px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-growth-consolidate-threshold">When an NPC's raw observations reach <input type="number" id="kt-cfg-growth-consolidate-threshold" class="mwt-input" style="width:70px;display:inline-block" value="${s.growthAutoConsolidationThreshold || 100}" min="10" max="1000"></label>
+                <label style="font-size:12px;color:var(--mwt-text-dim)" for="kt-cfg-growth-consolidate-threshold">When an NPC has <input type="number" id="kt-cfg-growth-consolidate-threshold" class="mwt-input" style="width:70px;display:inline-block" value="${s.growthAutoConsolidationThreshold || 100}" min="10" max="1000"> raw observations no consolidation pass has looked at yet</label>
             </div>
-            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, a consolidation pass runs automatically after any capture once an NPC's raw observations cross the threshold, draining in bounded batches (oldest first) until back below it. A pass only fires when evidence the previous pass never saw has arrived, and failed passes back off — uncited observations stay raw, nothing is deleted, and profiles / dossier lines are never touched automatically. 100 is a good default for long-running chats; raise it for NPCs that routinely carry a larger raw pool.</p>
+            <p style="font-size:11px;color:var(--mwt-text-dim);margin-top:4px">When ON, a consolidation pass runs automatically after any capture once enough new evidence has piled up for an NPC, covering only observations no earlier pass has seen (at most 150 per call, and at most 3 calls per capture across all NPCs). Observations a pass looked at but didn't use stay raw and don't count toward the threshold — press Consolidate yourself to give them another look. Claims you Expand are never rebuilt automatically. Failed passes back off, nothing is deleted, and profiles / dossier lines are never touched automatically. 100 is a good default for long-running chats.</p>
         </div>
         <div style="margin-top:12px">
             <label for="kt-cfg-track-mainchar"><input type="checkbox" id="kt-cfg-track-mainchar" ${s.trackMainCharAsNpc ? 'checked' : ''}> <span aria-hidden="true">🎭</span> Track AI characters ({{char}} + group members) as NPCs</label>

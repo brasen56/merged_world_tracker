@@ -1444,18 +1444,53 @@ async function refreshGrowthModalContent(modal, name, triggerBtn, flashMsg) {
 
 /**
  * Refresh the open Growth Profile modal after OUTSIDE work (the
- * auto-consolidation driver) changed its NPC's evidence, so the counts it
- * shows stay true without the user reopening it. No-op unless the modal is
- * open AND currently showing this NPC.
+ * auto-consolidation driver) changed its NPC's evidence. No-op unless the
+ * modal is open AND currently showing this NPC.
+ *
+ * Unlike the refreshes that follow the user's own button clicks, this one
+ * arrives unprompted, so it only rebuilds the content area when nothing in it
+ * would be lost ({@link growthContentSafeToRerender}). Otherwise it updates
+ * the counts line alone and says the list below is out of date — rebuilding
+ * would hand an in-flight action's busy button back as clickable, hide the
+ * Catch Up progress, or wipe a copy-only Psychoanalyze portrait that is saved
+ * nowhere else.
  *
  * @param {string} name — the NPC whose evidence changed
  * @param {string} [flashMsg] — optional status-bar message
- * @returns {Promise<boolean>} true when a modal was refreshed
+ * @returns {Promise<boolean>} true when the content area was rebuilt
  */
 export async function refreshOpenGrowthModal(name, flashMsg) {
     const modal = document.getElementById('kt-growth-modal');
     if (!modal || modal.dataset.npc !== name) return false;
-    await refreshGrowthModalContent(modal, name, null, flashMsg);
+    if (growthContentSafeToRerender(modal)) {
+        await refreshGrowthModalContent(modal, name, null, flashMsg);
+        return true;
+    }
+    const { getEvidenceSummary } = await import('./evidence.js');
+    const statusTextEl = modal.querySelector('.kt-growth-status-text');
+    const editorEl = modal.querySelector('#kt-growth-profile-text');
+    if (statusTextEl) statusTextEl.textContent = renderGrowthStatusText(getEvidenceSummary(name), editorEl?.value || null);
+    const lead = flashMsg ? `${flashMsg} ` : 'This NPC\'s evidence changed. ';
+    setStatus(modal, `${lead}The evidence list below is out of date — reopen this window to see it.`, 'info', 0);
+    return false;
+}
+
+/**
+ * Whether the Growth modal's content area can be rebuilt without losing
+ * anything: no action in flight (every action button marks itself busy via
+ * setControlBusy), no Psychoanalyze portrait on screen, and focus not inside
+ * it (an inline edit in progress, or a keyboard user's place).
+ *
+ * @param {HTMLElement} modal
+ * @returns {boolean}
+ */
+function growthContentSafeToRerender(modal) {
+    const content = modal.querySelector('.kt-growth-content');
+    if (!content) return false;
+    if (content.querySelector('[aria-busy="true"]')) return false;
+    if (content.querySelector('#kt-growth-psychoanalyze-text')) return false;
+    const active = document.activeElement;
+    if (active && active !== document.body && content.contains(active)) return false;
     return true;
 }
 

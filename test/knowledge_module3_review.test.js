@@ -14,7 +14,7 @@ import {
     getEvidenceFile, appendRawObservations, getCaptureCursor, updateRawObservation, deleteRawObservation, toggleCanon,
     updateConsolidated, deleteConsolidated, expandConsolidated,
     addUserOverride, updateUserOverride, deleteUserOverride,
-    clearEvidence, clearAllEvidence,
+    clearEvidence, clearAllEvidence, obsSeq, isUnseenForAuto,
 } from '../knowledge/evidence.js';
 
 beforeEach(() => {
@@ -76,7 +76,10 @@ function load(file, start, end, context) {
 describe('Module 3 review — regression probes', () => {
     test('consolidation preserves a source promoted to canon while generation was pending', () => {
         const file = { raw: [{ id: 'obs-001', claim: 'User canon', quote: 'receipt', canon: true, ts: 1 }], consolidated: [], archivedRaw: [] };
-        const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch: () => ({ ok: true }) };
+        const c = { getEvidenceFile: () => file, obsIdSequence: () => () => 'con-001', validCategory: x => x, touch: () => ({ ok: true }),
+            // obsSeq / isUnseenForAuto: the auto-consolidation watermark advance
+            // runs on every applied pass, including this zero-claim one.
+            obsSeq, isUnseenForAuto };
         load('evidence.js', 'export function applyConsolidation(', '/**\n * Update a consolidated', c);
         c.applyConsolidation('Mara', [{ claim: 'Model inference', sources: [1] }], ['obs-001']);
         expect(file.raw).toHaveLength(1);
