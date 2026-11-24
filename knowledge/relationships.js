@@ -16,7 +16,8 @@ import { getLorebookName } from './scope.js';
 import { readField, writeField } from './store.js';
 import { getRecentMessages, normaliseOutput, parseJsonLenient, captureScope, assertSameScope } from '../core/index.js';
 import { hasValidSettings } from './settings.js';
-import { RELATIONSHIP_EXTRACT_SYSTEM_PROMPT } from './prompts.js';
+import { RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, RELATIONSHIP_EXTRACT_RESPONSE, buildRetryReminder } from './prompts.js';
+import { assertResponseShape, retryReasonFor } from './response_shape.js';
 
 // ─── Relationship data CRUD ──────────────────────────────────────────────────
 //
@@ -900,18 +901,22 @@ export async function runRelationshipExtract({ trigger = null } = {}) {
         rosterSection, '',
         '<recent_messages>', recentMessages, '</recent_messages>', '',
         '='.repeat(60),
-        'Extract relationships. Output only JSON.',
+        `Extract relationships. ${RELATIONSHIP_EXTRACT_RESPONSE.reminder}`,
     ].join('\n');
 
     // Dynamic import avoids a circular dependency with lorebook.js (which imports
     // stripRelationshipBlock from here).
     const { ktFetchFromApi } = await import('./lorebook.js');
 
-    // Retry once on parse failure (mirrors runScan's two-attempt loop).
+    // Retry once on a parse failure or a wrong-shape reply, telling the model
+    // which (mirrors runScan's two-attempt loop).
     let lastErr = null;
     let lastPreview = '';
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const raw = await ktFetchFromApi(RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, userContent, { trigger });
+        const content = attempt === 1
+            ? userContent
+            : `${userContent}\n\n${buildRetryReminder(retryReasonFor(lastErr), RELATIONSHIP_EXTRACT_RESPONSE)}`;
+        const raw = await ktFetchFromApi(RELATIONSHIP_EXTRACT_SYSTEM_PROMPT, content, { trigger });
         // KNOWLEDGE-04: Assert scope BEFORE applying, not just in the caller.
         // applyExtractedRelationships writes through writeField(getLorebookName(),
         // …), and getLorebookName() resolves per chat/character under non-global
@@ -927,15 +932,17 @@ export async function runRelationshipExtract({ trigger = null } = {}) {
         const cleaned = normaliseOutput(raw);
         try {
             const result = parseJsonLenient(cleaned);
+            // Valid JSON under invented keys used to apply as "no relationships".
+            assertResponseShape(result, RELATIONSHIP_EXTRACT_RESPONSE, { op: 'relationship_extract', attempt });
             return applyExtractedRelationships(result);
         } catch (err) {
             lastErr = err;
             lastPreview = cleaned.slice(0, 120);
-            console.warn(`[MWT:Knowledge] Relationship extract parse failed (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
+            console.warn(`[MWT:Knowledge] Relationship extract response rejected (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
             if (attempt < 2) continue;
         }
     }
-    throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
+    throw new Error(`Model did not return the expected JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
 }
 
 /**

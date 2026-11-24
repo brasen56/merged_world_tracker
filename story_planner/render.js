@@ -305,11 +305,11 @@ function candidateForEntityId(candidates, entityId) {
  * slice can hide a checked subject beyond row 30, making it appear selected
  * in the request while giving the user no checkbox with which to clear it.
  */
-function visibleJourneySubjectCandidates(candidates, savedEntityIds) {
+function visibleJourneySubjectCandidates(candidates, savedEntityIds, limit = MAX_JOURNEY_SUBJECT_CANDIDATES) {
     const visible = [];
     const seen = new Set();
     const add = candidate => {
-        if (!candidate || seen.has(candidate.entityId) || visible.length >= MAX_JOURNEY_SUBJECT_CANDIDATES) return;
+        if (!candidate || seen.has(candidate.entityId) || visible.length >= limit) return;
         seen.add(candidate.entityId);
         visible.push(candidate);
     };
@@ -919,8 +919,10 @@ export function openGenerateDialog() {
     const savedSubjectIds = new Set(preferences.subjectEntityIds || []);
     const subjectCandidates = visibleJourneySubjectCandidates(allSubjectCandidates, savedSubjectIds);
     const savedContextIds = new Set(context.entityIds || []);
+    // Public context sources are independent of the bounded Journey ownership
+    // table. Keep saved identities visible, but offer the entire registry.
     const selectedContextSources = context.mode === 'selected'
-        ? visibleJourneySubjectCandidates(allSubjectCandidates, [...savedContextIds, ...savedSubjectIds])
+        ? visibleJourneySubjectCandidates(allSubjectCandidates, [...savedContextIds, ...savedSubjectIds], Infinity)
         : [];
     const activeContextSources = new Map();
     const excludedContextSourceIds = new Set();

@@ -14,7 +14,11 @@ import {
     isCancellation, notify, record,
 } from '../core/index.js';
 
-import { buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT } from './prompts.js';
+import {
+    buildScanSystemPrompt, STATE_UPDATE_PROMPT, NPC_UPDATE_PROMPT, DOSSIER_UPDATE_PROMPT, DOSSIER_ENRICH_PROMPT, DOSSIER_FIELD_REFRESH_PROMPT,
+    SCAN_RESPONSE, NPC_UPDATE_RESPONSE, DOSSIER_ENRICH_RESPONSE, DOSSIER_FIELD_REFRESH_RESPONSE, buildRetryReminder,
+} from './prompts.js';
+import { assertResponseShape, retryReasonFor, wrapFlatFieldsAnswer } from './response_shape.js';
 import { getSettings, hasValidSettings } from './settings.js';
 import {
     TRACKER_SENTINEL,
@@ -1578,23 +1582,29 @@ export async function runScan({ trigger = null } = {}) {
         ? getUserNames({ lower: false })
         : getPlayerNames({ lower: false, includeFirstChat: true });
     const playerSection = playerNames.size > 0 ? `<player_names_exclude>\n${[...playerNames].map(n => `- ${n}`).join('\n')}\n</player_names_exclude>` : '';
-    const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), 'Scan for NPCs. Output only JSON.'].filter(s => s !== null && s !== '').join('\n');
+    const userContent = [knownSection, '', playerSection, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', chronicle ? `<chronicle>\n${chronicle}\n</chronicle>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Scan for NPCs. ${SCAN_RESPONSE.reminder}`].filter(s => s !== null && s !== '').join('\n');
     // The cast rule is composed into the SYSTEM prompt rather than added as a
     // user-turn note — the rule it replaces is categorical, and a contradicting
     // note in the user turn loses to it. See buildScanSystemPrompt.
     const systemPrompt = buildScanSystemPrompt({ dossier: dossierMode, trackMainCharAsNpc: trackMain });
 
     // Attempt the scan up to two times. If the first response fails to parse
-    // (typically because it was truncated by max_tokens), retry once — the
-    // model often succeeds on a second pass, and parseJsonLenient will salvage
-    // many truncated responses anyway.
+    // (typically because it was truncated by max_tokens) or parses with the
+    // wrong top-level keys, retry once with the reason appended — the model
+    // often succeeds on a second pass, and parseJsonLenient will salvage many
+    // truncated responses anyway.
     let lastErr = null;
     let lastPreview = '';
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const raw = await ktFetchFromApi(systemPrompt, userContent, { trigger });
+        const content = attempt === 1
+            ? userContent
+            : `${userContent}\n\n${buildRetryReminder(retryReasonFor(lastErr), SCAN_RESPONSE)}`;
+        const raw = await ktFetchFromApi(systemPrompt, content, { trigger });
         const cleaned = normaliseOutput(raw);
         try {
             const result = parseJsonLenient(cleaned);
+            // Valid JSON under invented keys used to read as "no NPCs found".
+            assertResponseShape(result, SCAN_RESPONSE, { op: 'scan', attempt });
             const playerSet = new Set([...playerNames].map(n => n.toLowerCase()));
             const notPlayer = (entry) => entry && entry.name && !playerSet.has(String(entry.name).toLowerCase());
             return {
@@ -1607,11 +1617,11 @@ export async function runScan({ trigger = null } = {}) {
         } catch (err) {
             lastErr = err;
             lastPreview = cleaned.slice(0, 120);
-            console.warn(`[MWT:Knowledge] Scan JSON parse failed (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
+            console.warn(`[MWT:Knowledge] Scan response rejected (attempt ${attempt}): ${err.message}. Preview: "${lastPreview}"`);
             if (attempt < 2) continue;
         }
     }
-    throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
+    throw new Error(`Model did not return the expected JSON after 2 attempts. Last error: ${lastErr?.message || 'unknown'}. Preview: "${lastPreview}"`);
 }
 
 // ─── State update ────────────────────────────────────────────────────────────
@@ -1647,7 +1657,7 @@ export async function runNpcUpdate(name, uid) {
     const recentMessages = getRecentMessages();
     const worldState = getWorldStateFactual();
     if (!recentMessages) throw new Error('No recent messages.');
-    const userContent = [`<entity>${name}</entity>`, `<current_entry>\n${currentContent}\n</current_entry>`, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Identify new info about ${name}. Output only JSON.`].filter(Boolean).join('\n');
+    const userContent = [`<entity>${name}</entity>`, `<current_entry>\n${currentContent}\n</current_entry>`, '', worldState ? `<world_state>\n${worldState}\n</world_state>` : '', '', '<recent_messages>', recentMessages, '</recent_messages>', '', '='.repeat(60), `Identify new info about ${name}. ${NPC_UPDATE_RESPONSE.reminder}`].filter(Boolean).join('\n');
     // Use the dossier update prompt when the existing entry is a dossier, or
     // when dossier mode is enabled in settings (so new fields get captured).
     const settings = getSettings();
@@ -1656,18 +1666,20 @@ export async function runNpcUpdate(name, uid) {
 
     // Retry loop — mirrors runStateUpdate's 2-attempt pattern. A single
     // truncated response (max_tokens cut off) would throw from
-    // parseJsonLenient with no recovery; the retry gives the model a second
-    // chance to produce valid JSON.
+    // parseJsonLenient with no recovery, and valid JSON under invented keys
+    // used to read as "No new info"; the retry tells the model which of the
+    // two happened and restates the shape.
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
         let raw, cleaned, result;
         try {
             const fetchContent = attempt === 1
                 ? userContent
-                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON, no prose.]`;
+                : `${userContent}\n\n${buildRetryReminder(retryReasonFor(lastError), NPC_UPDATE_RESPONSE)}`;
             raw = await ktFetchFromApi(systemPrompt, fetchContent);
             cleaned = normaliseOutput(raw);
             result = parseJsonLenient(cleaned);
+            assertResponseShape(result, NPC_UPDATE_RESPONSE, { op: 'npc_update', attempt });
         } catch (err) {
             // Coordinator cancellation (TODO §1): an aborted/retired call must
             // be rethrown immediately, never retried. A retry would submit a
@@ -1678,9 +1690,9 @@ export async function runNpcUpdate(name, uid) {
             // AbortError a mid-wire abort produces.
             if (isCancellation(err)) throw err;
             lastError = err;
-            console.warn(`[MWT:Knowledge] runNpcUpdate JSON parse failed (attempt ${attempt}): ${err.message}`);
+            console.warn(`[MWT:Knowledge] runNpcUpdate response rejected (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;
-            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+            throw new Error(`Model did not return the expected JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
         }
 
         // Shared three-state ownership, including the legacy upgrade lock.
@@ -1752,31 +1764,32 @@ export async function runNpcEnrich(name, uid) {
         '</recent_messages>',
         '',
         '='.repeat(60),
-        `Write a COMPLETE dossier for ${name}. Fill every field. Output only JSON.`,
+        `Write a COMPLETE dossier for ${name}. Fill every field. ${DOSSIER_ENRICH_RESPONSE.reminder}`,
     ].filter(Boolean).join('\n');
 
     // Retry loop — mirrors runNpcUpdate and runStateUpdate's 2-attempt pattern.
     // A truncated response (max_tokens cut off) would throw from
-    // parseJsonLenient with no recovery; the retry gives the model a second
-    // chance to produce valid JSON.
+    // parseJsonLenient with no recovery, and a reply without a "fields" object
+    // used to merge as "nothing to fill"; the retry names the problem.
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
         let raw, cleaned, result;
         try {
             const fetchContent = attempt === 1
                 ? userContent
-                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON, no prose.]`;
+                : `${userContent}\n\n${buildRetryReminder(retryReasonFor(lastError), DOSSIER_ENRICH_RESPONSE)}`;
             raw = await ktFetchFromApi(DOSSIER_ENRICH_PROMPT, fetchContent);
             cleaned = normaliseOutput(raw);
             result = parseJsonLenient(cleaned);
+            assertResponseShape(result, DOSSIER_ENRICH_RESPONSE, { op: 'npc_enrich', attempt });
         } catch (err) {
             // Coordinator cancellation — see runNpcUpdate's catch above: an
             // aborted call is rethrown, never retried at a fresh epoch.
             if (isCancellation(err)) throw err;
             lastError = err;
-            console.warn(`[MWT:Knowledge] runNpcEnrich JSON parse failed (attempt ${attempt}): ${err.message}`);
+            console.warn(`[MWT:Knowledge] runNpcEnrich response rejected (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;
-            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+            throw new Error(`Model did not return the expected JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
         }
 
         // Build the complete dossier content from the enrich result. We use the
@@ -1914,33 +1927,33 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
         '</refresh_fields>',
         '',
         '='.repeat(60),
-        `Refresh ONLY the fields listed in <refresh_fields> for ${name}. Output only JSON.`,
+        `Refresh ONLY the fields listed in <refresh_fields> for ${name}. ${DOSSIER_FIELD_REFRESH_RESPONSE.reminder}`,
     ].filter(Boolean).join('\n');
 
     // Retry loop — mirrors runNpcUpdate / runNpcEnrich's 2-attempt pattern. A
-    // truncated response (max_tokens cut off) or a non-object parse gets one
-    // more chance with an explicit reminder appended.
+    // truncated response (max_tokens cut off) or a reply without a "fields"
+    // object gets one more chance, told which of the two happened. A FLAT
+    // reply that mirrors <refresh_fields> ({"agenda": "…"}) is unambiguous and
+    // is wrapped instead of retried (wrapFlatFieldsAnswer).
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
         let raw, cleaned, result;
         try {
             const fetchContent = attempt === 1
                 ? userContent
-                : userContent + `\n\n[REMINDER: Your previous response was truncated or invalid JSON. Output ONLY valid JSON with just the requested field keys, no prose.]`;
+                : `${userContent}\n\n${buildRetryReminder(retryReasonFor(lastError), DOSSIER_FIELD_REFRESH_RESPONSE)}`;
             raw = await ktFetchFromApi(DOSSIER_FIELD_REFRESH_PROMPT, fetchContent);
             cleaned = normaliseOutput(raw);
-            result = parseJsonLenient(cleaned);
-            if (!result || typeof result !== 'object' || Array.isArray(result)) {
-                throw new Error('response was not a JSON object');
-            }
+            result = wrapFlatFieldsAnswer(parseJsonLenient(cleaned), requested, { op: 'dossier_field_refresh' });
+            assertResponseShape(result, DOSSIER_FIELD_REFRESH_RESPONSE, { op: 'dossier_field_refresh', attempt });
         } catch (err) {
             // Coordinator cancellation — see runNpcUpdate's catch above: an
             // aborted call is rethrown, never retried at a fresh epoch.
             if (isCancellation(err)) throw err;
             lastError = err;
-            console.warn(`[MWT:Knowledge] runDossierFieldRefresh JSON parse failed (attempt ${attempt}): ${err.message}`);
+            console.warn(`[MWT:Knowledge] runDossierFieldRefresh response rejected (attempt ${attempt}): ${err.message}`);
             if (attempt < 2) continue;
-            throw new Error(`Model did not return valid JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
+            throw new Error(`Model did not return the expected JSON after 2 attempts. Last error: ${lastError?.message || 'unknown'}`);
         }
 
         // Scope enforcement (defense in depth): keep ONLY the requested keys —
@@ -1952,9 +1965,8 @@ export async function runDossierFieldRefresh(name, uid, fieldKeys) {
         // Phase 1 seam S5: the shared field contract — an invalid value is
         // dropped (null keeps the existing line) with a surfaced reason;
         // valid values for other requested fields are retained.
-        const src = (result.fields && typeof result.fields === 'object' && !Array.isArray(result.fields))
-            ? result.fields
-            : {};
+        // assertResponseShape above guarantees `fields` is a plain object.
+        const src = result.fields;
         const fields = {};
         const contractRejections = [];
         for (const key of requested) {

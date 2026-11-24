@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **v1.4.23** onward are written as releases happen. For commit-level detail,
 > browse `git log` or the GitHub compare links at the bottom of this file.
 
-## [Unreleased]
+## [2.20.1]
 
 ### Added
 
@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Expand sticks:** observations restored by Expand are never presented to an automatic pass again, so the next capture can't rebuild a claim you just undid.
   - **Overlap-safe and scope-safe:** a per-NPC in-flight guard prevents manual and automatic passes from racing, automatic calls run as background work that yields to user generations, and a chat switch discards the scan quietly. An open Growth window is refreshed only when nothing in it would be lost (no action running, no Psychoanalyze portrait showing); otherwise its counts update and it says the list is out of date.
   - **Backlog management only:** the consolidated and archived tiers keep growing unbounded, profiles and dossier lines are never touched automatically, uncited observations stay raw, and nothing is ever deleted (Expand still undoes any claim). Manual Consolidate is unchanged (whole pool, one call), except that a reply missing its `consolidated` list is now reported as a failure instead of a silent "+0 claims". Full contract: [docs/GROWTH_AUTO_CONSOLIDATION_SCOPE.md](docs/GROWTH_AUTO_CONSOLIDATION_SCOPE.md).
+
+### Fixed
+
+- **Knowledge no longer reads a wrongly shaped reply as "nothing new".** Some local models, late in a long chat, answer with valid JSON under keys of their own (`personal_habits`, `behavioral_traits`, …) instead of the ones asked for (reported on GitHub with a Gemma roleplay fine-tune). The NPC scan, 🔄 Update, 📋 Enrich, 🎯 Fields refresh and relationship extraction treated that as "No new info" — no retry, no warning. Now:
+  - every Knowledge request ends by restating the reply's top-level keys, so the format is right next to the end of the prompt instead of 50 messages above it;
+  - a reply with none of the expected keys (or a bare `null` or list) is retried once, and the retry tells the model what was wrong — e.g. *used the top-level keys "personal_habits" … instead of "fields" and "new_knowledge"*. The scan retry used to resend the identical prompt;
+  - each rejected reply is logged in Diagnostics → Log as `response_shape_rejected` (which call, which attempt, up to 5 of the invented key names), so a drifting model shows up even when its retry succeeds;
+  - a 🎯 Fields reply that drops the `"fields"` wrapper (`{"agenda": "…"}`) is used as is (logged as `response_shape_repaired`) instead of being discarded;
+  - an empty `{}` still counts as "nothing new" for scans, updates and relationships. After two wrong replies the error says the model "did not return the expected JSON" rather than "valid JSON".
+- **🌱 Growth capture no longer skips messages on a wrongly shaped reply.** Continuous capture, ILS backfill and a first capture moved their cursor forward even when the reply had no `observations` list, so those messages were never read again — and 🌱 Catch Up, which keeps going while the cursor moves, could walk a whole history that way and record nothing. Each request now ends with the same kind of format reminder, and a reply without an `observations` list (including `{}`) stops before anything is saved: the cursor stays put, the failure is reported (the capture toast, Catch Up's error list, and `response_shape_rejected` in Diagnostics), and the next capture reads the same messages again. A real empty list still advances as before.
 
 ## [2.20.0]
 

@@ -306,6 +306,66 @@ OUTPUT FORMAT:
 
 ${contractPromptBlock({ mode: 'dossier' })}`;
 
+// ─── Response shapes: end-of-request reminders ───────────────────────────────
+// Each OUTPUT FORMAT above sits at the top of its system prompt, and up to 50
+// recent messages follow it in the request. At that distance small local
+// models (first reported on a Gemma roleplay fine-tune) lose the schema and
+// answer with valid JSON under keys of their own ("personal_habits",
+// "behavioral_traits"), which used to read as "nothing new". So every request
+// ends by restating its response's TOP-LEVEL shape — only the top level: the
+// field lists stay in the system prompts above, the one place to edit them.
+//
+// Each spec also drives the code-side check (knowledge/response_shape.js), so
+// the keys a reminder names and the keys the check accepts are the same list.
+// test/knowledge_response_shape.test.js pins that every key is named. The
+// Growth evidence and relationship specs sit beside their own prompts below.
+//
+//   keys          — the expected top-level keys; a reply carrying none is rejected
+//   emptyOk       — `{}` reads as "nothing new" rather than a wrong shape
+//   requireObject — a key that must be present and hold a JSON object
+//   requireArray  — a key that must be present and hold an array
+
+/** runScan — compact and dossier scans share the top level. */
+export const SCAN_RESPONSE = Object.freeze({
+    keys: Object.freeze(['new_minor', 'new_major', 'update_minor', 'update_major']),
+    emptyOk: true,
+    reminder: 'Respond with ONE JSON object whose only top-level keys are "new_minor", "new_major", "update_minor" and "update_major", each an array ([] if none). No other keys, no code fences.',
+});
+
+/** runNpcUpdate — NPC_UPDATE_PROMPT and DOSSIER_UPDATE_PROMPT share the top level. */
+export const NPC_UPDATE_RESPONSE = Object.freeze({
+    keys: Object.freeze(['fields', 'new_knowledge']),
+    emptyOk: true,
+    reminder: 'Respond with ONE JSON object whose only top-level keys are "fields" (an object; null for any value that did not change) and "new_knowledge" (an array of {"fact", "source", "date"}; [] if nothing new). No other keys, no code fences.',
+});
+
+/** runNpcEnrich — an enrich fills every field, so "fields" is required. */
+export const DOSSIER_ENRICH_RESPONSE = Object.freeze({
+    keys: Object.freeze(['fields', 'new_knowledge']),
+    requireObject: 'fields',
+    reminder: 'Respond with ONE JSON object whose only top-level keys are "fields" (an object with every dossier field from the OUTPUT FORMAT) and "new_knowledge" (an array of {"fact", "source", "date"}; [] if nothing new). No other keys, no code fences.',
+});
+
+/** runDossierFieldRefresh — the refreshed values live under "fields". */
+export const DOSSIER_FIELD_REFRESH_RESPONSE = Object.freeze({
+    keys: Object.freeze(['fields']),
+    requireObject: 'fields',
+    reminder: 'Respond with ONE JSON object whose only top-level key is "fields": an object holding only the keys listed in <refresh_fields>. No other keys, no code fences.',
+});
+
+/**
+ * The note appended to a retry: the actual reason the first reply was
+ * rejected, then the shape reminder again so it is the last thing the model
+ * reads (the runStateUpdate `<previous_attempt_rejected>` idea).
+ *
+ * @param {string} reason — from retryReasonFor() in knowledge/response_shape.js
+ * @param {{reminder: string}} spec — one of the *_RESPONSE specs above
+ * @returns {string}
+ */
+export function buildRetryReminder(reason, spec) {
+    return `[REMINDER: Your previous response was rejected because ${reason}. ${spec.reminder}]`;
+}
+
 // ─── NPC Growth Profile prompts ──────────────────────────────────────────────
 // Implements the evidence-driven personality system from NPC_GROWTH_BLUEPRINT.md.
 //
@@ -352,6 +412,20 @@ Quality bar:
 - Each observation should be grounded in a specific moment. Vague generalities without a sharp quote are inadmissible.
 - Aim for 5-12 observations. Fewer is fine if the NPC barely appears; never pad with weak observations.
 - If the NPC does not appear or has no observable behavior in the messages, return an empty observations array: { "observations": [] }`;
+
+/**
+ * Growth evidence capture (manual capture, continuous capture, ILS backfill).
+ * Stricter than the Knowledge specs: `{}` is rejected and the list is
+ * required, because every capture path advances its cursor on an accepted
+ * reply — a wrong shape read as "no observations" skips those messages for
+ * good, while a rejected one costs only a re-read next time.
+ * See "Response shapes" above for the fields.
+ */
+export const GROWTH_EVIDENCE_RESPONSE = Object.freeze({
+    keys: Object.freeze(['observations']),
+    requireArray: 'observations',
+    reminder: 'Respond with ONE JSON object whose only top-level key is "observations": an array of {"category", "claim", "quote", "msgIdx"} ([] if the NPC shows no observable behavior). No other keys, no code fences.',
+});
 
 export const GROWTH_DOSSIER_PROMPT = `Draft Personality and Voice dossier lines from the supplied Growth profile and evidence. This is a LEAF, never a ROOT: output is for human review only, never evidence or profile generation.
 Return only complete strict JSON, with this exact shape:
@@ -532,6 +606,16 @@ Guidance:
 - "stance" is ordered warmest to most adversarial: caring, friendly, wary, hostile.
 - Only emit a stance when recent messages show a clear disposition toward {{user}}. If unclear, omit it.
 - Use each NPC's name exactly as it appears in <known_npcs> when possible.`;
+
+/**
+ * runRelationshipExtract. Reads a fixed window of recent messages (no
+ * cursor), so `{}` is a safe "nothing qualifies". See "Response shapes" above.
+ */
+export const RELATIONSHIP_EXTRACT_RESPONSE = Object.freeze({
+    keys: Object.freeze(['edges', 'stances']),
+    emptyOk: true,
+    reminder: 'Respond with ONE JSON object whose only top-level keys are "edges" (an array of {"from", "to", "type", "notes"}) and "stances" (an array of {"npc", "stance"}), each [] if nothing qualifies. No other keys, no code fences.',
+});
 
 // ─── Ledger cleanup (condensation) prompt ─────────────────────────────────────
 // Phase 4 of docs/KNOWLEDGE_CONCISION_IMPLEMENTATION_PLAN.md. Used ONLY by the

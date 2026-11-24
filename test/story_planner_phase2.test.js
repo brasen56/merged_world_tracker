@@ -923,6 +923,39 @@ describe('Story Planner scoped generate dialog', () => {
         expect(buildContext.mock.lastCall[0].entityIds).toHaveLength(2);
     });
 
+    test('shows all public context candidates like the private picker and previews a newly selected NPC beyond row 30', async () => {
+        const candidates = Array.from({ length: 40 }, (_, index) => ({
+            entityId: `entity-${String(index + 1).padStart(2, '0')}`,
+            name: `Character ${String(index + 1).padStart(2, '0')}`,
+            type: 'major', dossierAvailable: true, mergedEntityIds: [],
+        }));
+        const buildContext = vi.fn(async selection => ({
+            text: '', records: selection.entityIds.length, requested: selection.entityIds.length, omitted: 0,
+            coverage: candidates.filter(candidate => selection.entityIds.includes(candidate.entityId)).map(candidate => ({
+                ...candidate, status: 'complete', isContextSource: true,
+            })),
+        }));
+        registerSafeCharacterContextProvider({ listCandidates: () => candidates, buildContext });
+        setPlanData({ characterContext: { mode: 'selected', entityIds: ['entity-01'] } });
+        await openDialog();
+
+        const sources = [...document.querySelectorAll('input[name="sp-generate-context-source"]')];
+        expect(sources.map(input => input.value)).toEqual(candidates.map(candidate => candidate.entityId));
+        expect(sources.map(input => input.value)).toEqual(
+            [...document.querySelectorAll('input[name="sp-author-npc"]')].map(input => input.value),
+        );
+        // Journey ownership still uses its separate, bounded request table.
+        expect(document.querySelectorAll('input[name="sp-generate-subject"]')).toHaveLength(30);
+        const last = sources.find(input => input.value === 'entity-40');
+        expect(last.disabled).toBe(false);
+        toggle(last);
+        await vi.waitFor(() => {
+            expect(buildContext).toHaveBeenLastCalledWith(expect.objectContaining({ entityIds: ['entity-01', 'entity-40'] }));
+            expect(document.querySelector('#sp-generate-context-coverage').textContent).toContain('Character 40: Included');
+        });
+        expect(getCharacterContextSelection().entityIds).toEqual(['entity-01']);
+    });
+
     test('shows every saved context source separately so an off-screen NPC can be omitted for this request', async () => {
         const candidates = Array.from({ length: 40 }, (_, index) => ({
             entityId: `entity-${String(index + 1).padStart(2, '0')}`,

@@ -65,7 +65,8 @@ import {
     getCaptureWatermark, getCaptureCursor, setCaptureWatermark,
     getBackfillWatermark, setBackfillWatermark,
 } from './evidence.js';
-import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT } from './prompts.js';
+import { GROWTH_EVIDENCE_PROMPT, GROWTH_PROFILE_PROMPT, GROWTH_PSYCHOANALYZE_PROMPT, GROWTH_CONSOLIDATION_PROMPT, GROWTH_EVIDENCE_RESPONSE } from './prompts.js';
+import { assertResponseShape } from './response_shape.js';
 import { expandIlsSummaries, isIlsSummary, normalizeSendDate } from './ils_compat.js';
 
 /** Growth is a leaf: capture may read facts and canon, never identity prose. */
@@ -234,6 +235,34 @@ export function extractCanonFromEntry(content) {
 // ─── Evidence capture ────────────────────────────────────────────────────────
 
 /**
+ * Parse an evidence-capture reply and refuse a wrongly shaped one.
+ *
+ * Every capture path advances a cursor once it accepts a reply (continuous
+ * capture's capture cursor, backfill's lastBackfillTs, the bootstrap's seed),
+ * and `appendRawObservations` advances it even when nothing is added — right
+ * for a real "no observations", but a reply under invented keys
+ * ({"behavioral_traits": [...]}) used to read as exactly that, so its messages
+ * were skipped for good, and Catch Up could walk a whole history that way.
+ * Throwing here, before any append, keeps the cursor where it was: the same
+ * messages are read again by the next capture. No retry of its own — Catch Up
+ * deliberately owns retries (adaptive halving), and a capture failure is
+ * already reported (toast / Catch Up error list).
+ *
+ * @param {string} cleaned — normalised model output
+ * @param {string} op — diagnostics op name for the rejection event
+ * @returns {object} the parsed reply, guaranteed to carry an `observations` array
+ */
+function parseEvidenceReply(cleaned, op) {
+    const result = parseJsonLenient(cleaned);
+    try {
+        assertResponseShape(result, GROWTH_EVIDENCE_RESPONSE, { op });
+    } catch (err) {
+        throw new Error(`Wrong reply shape — ${err.message}; nothing was captured and these messages will be read again next time`);
+    }
+    return result;
+}
+
+/**
  * Run the evidence-capture API call: extract distilled behavioral
  * observations (with verbatim quotes) from recent messages about a target NPC.
  *
@@ -276,14 +305,14 @@ export async function captureEvidence(name, uid, captureWindow = getIndexedMessa
         '</messages>',
         '',
         '='.repeat(60),
-        `Extract behavioral observations about ${name}. Output only JSON.`,
+        `Extract behavioral observations about ${name}. ${GROWTH_EVIDENCE_RESPONSE.reminder}`,
     ].filter(Boolean).join('\n');
 
     const raw = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: 1 });
     const cleaned = normaliseOutput(raw);
-    const result = parseJsonLenient(cleaned);
+    const result = parseEvidenceReply(cleaned, 'growth_capture');
 
-    const observations = Array.isArray(result.observations) ? result.observations : [];
+    const observations = result.observations;
     const chat = getChat() || [];
 
     // Validate in two stages. First, drop truly unanchored items (no claim or no
@@ -1066,7 +1095,7 @@ export async function runContinuousCapture(name, opts = {}) {
         '</recent_messages>',
         '',
         '='.repeat(60),
-        `Extract behavioral observations about ${name} from these recent messages. Output only JSON.`,
+        `Extract behavioral observations about ${name} from these recent messages. ${GROWTH_EVIDENCE_RESPONSE.reminder}`,
     ].filter(Boolean).join('\n');
 
     const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries, trigger: opts.trigger ?? null });
@@ -1080,9 +1109,11 @@ export async function runContinuousCapture(name, opts = {}) {
         return null;
     }
     const cleaned = normaliseOutput(rawResponse);
-    const result = parseJsonLenient(cleaned);
+    // Throws before the append below, so a wrong-shape reply leaves the
+    // capture cursor where it was (see parseEvidenceReply).
+    const result = parseEvidenceReply(cleaned, 'growth_continuous_capture');
 
-    const observations = Array.isArray(result.observations) ? result.observations : [];
+    const observations = result.observations;
     const chat = getChat() || [];
 
     // Validate quotes (same two-stage pipeline as captureEvidence).
@@ -1354,15 +1385,17 @@ export async function runIlsBackfillCapture(name, opts = {}) {
         '</messages>',
         '',
         '='.repeat(60),
-        `Extract behavioral observations about ${name} from these messages. Output only JSON.`,
+        `Extract behavioral observations about ${name} from these messages. ${GROWTH_EVIDENCE_RESPONSE.reminder}`,
     ].filter(Boolean).join('\n');
 
     const rawResponse = await ktFetchFromApi(GROWTH_EVIDENCE_PROMPT, userContent, { retries: _retries });
     if (!scopeStillCurrent(scopeBefore).ok) throw new Error('Chat changed during backfill — result discarded.');
     const cleaned = normaliseOutput(rawResponse);
-    const result = parseJsonLenient(cleaned);
+    // Throws before the watermark commit below, so a wrong-shape reply leaves
+    // lastBackfillTs where it was (see parseEvidenceReply).
+    const result = parseEvidenceReply(cleaned, 'growth_backfill');
 
-    const observations = Array.isArray(result.observations) ? result.observations : [];
+    const observations = result.observations;
 
     // For backfill, quote verification searches both the live chat and the
     // expanded window (originals may not be at their cited indices — they came

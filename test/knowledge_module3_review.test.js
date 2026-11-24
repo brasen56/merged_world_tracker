@@ -60,6 +60,8 @@ test('capture observations and cursor are one checked evidence commit', () => {
 
 import { reconcileImportedUid } from '../knowledge/reconcile.js';
 import { validateFields, validateKnowledgeList } from '../knowledge/field_contract.js';
+import { DOSSIER_ENRICH_RESPONSE, buildRetryReminder } from '../knowledge/prompts.js';
+import { assertResponseShape, retryReasonFor } from '../knowledge/response_shape.js';
 import {
     _clearCacheForTests, hydrateBook, peekStore, readField, resetStoreCache, writeField,
 } from '../knowledge/store.js';
@@ -100,6 +102,9 @@ describe('Module 3 review — regression probes', () => {
             // contract at seam S4 — the real implementation, not a pass-through
             // stub, so this probe also covers ownership surviving validation.
             validateFields, validateKnowledgeList,
+            // The real shape check too: the stubbed reply has a "fields"
+            // object, so it must pass through unchanged.
+            DOSSIER_ENRICH_RESPONSE, buildRetryReminder, assertResponseShape, retryReasonFor,
             buildUpdatedDossierContent: (text, fields) => { forwarded = fields; return text; } };
         load('lorebook.js', 'export async function runNpcEnrich(', '// ─── Dossier per-field refresh', c);
         await c.runNpcEnrich('Mara', 1);
